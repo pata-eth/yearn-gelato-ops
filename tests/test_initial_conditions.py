@@ -11,7 +11,7 @@ def test_strategy_is_active(strategy, aggregator, yHarvest):
     # To onboard strategies to the yHarvest job, they must assign its keeper to the yHarvest
     assert (
         strategy.keeper() == yHarvest
-    ), "Yearn Harvester is not the strategy's keeper"
+    ), "Yearn Harvest is not the strategy's keeper"
 
 
 def test_initial_params(
@@ -20,7 +20,7 @@ def test_initial_params(
     strategist_ms,
     gov,
 ):
-    assert not yHarvest.isActive(), "Harvester is active"
+    assert not yHarvest.isActive(), "Harvest is active"
     assert int(yHarvest.jobId().hex()) == 0, "Job ID must be empty"
 
     assert yHarvest.owner() == owner

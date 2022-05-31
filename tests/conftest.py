@@ -57,6 +57,11 @@ def yHarvest(
 
 
 @pytest.fixture(scope="function")
+def yHarvestDeployed():
+    yield Contract("0xA8D8C5AcB1D8CCe9b21EF79713B776DF2EFA77bB")
+
+
+@pytest.fixture(scope="function")
 def gelato():
     yield interface.IGelatoOps("0x6EDe1597c05A0ca77031cBA43Ab887ccf24cd7e8")
 
@@ -94,9 +99,7 @@ def gov(accounts):
 @pytest.fixture(scope="module")
 def strategist_ms(accounts):
     # like governance, but better
-    yield accounts.at(
-        "0x72a34AbafAB09b15E7191822A679f28E067C4a16", force=True
-    )
+    yield accounts.at("0x72a34AbafAB09b15E7191822A679f28E067C4a16", force=True)
 
 
 @pytest.fixture(scope="module")

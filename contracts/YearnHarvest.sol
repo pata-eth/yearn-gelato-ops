@@ -6,7 +6,7 @@ pragma experimental ABIEncoderV2;
 @title Yearn Harvest
 @author yearn.finance
 @notice Yearn Harvest or yHarvest is a smart contract that leverages Gelato to automate
-the harvest of stragegies that have yHarvest assigned as its keeper.
+the harvest of strategies that have yHarvest assigned as its keeper.
 The contract provides the Gelato network of keepers Yearn harvest jobs that
 are ready to execute, and it pays Gelato after a succesful harvest.
 */
@@ -14,7 +14,7 @@ are ready to execute, and it pays Gelato after a succesful harvest.
 import {SafeMath} from "@openzeppelin/contracts/math/SafeMath.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {SafeERC20, IERC20} from "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
-import {StrategyAPI} from "@yearnvaults/contracts/BaseStrategy.sol";
+import {StrategyAPI, VaultAPI, StrategyParams} from "@yearnvaults/contracts/BaseStrategy.sol";
 import {IGelatoOps} from "../interfaces/IGelato.sol";
 
 /**
@@ -54,12 +54,7 @@ contract YearnHarvest {
     // often left at 0, which becomes a problem for yHarvest as the checkHarvestStatus()
     // method in the yHarvest contract would always propose the same strategy to
     // be harvested.
-    uint256 public runMaxTime = 6 hours;
-
-    // `lastRun` keeps track of the time at which a strategy was last harvested, and
-    // allows us to determine along with `runMaxTime` whether yHarvest should
-    // propose Gelato a strategy to be harvested.
-    mapping(address => uint256) internal lastRun;
+    uint256 public runMaxTime = 3 hours;
 
     // Yearn Lens data aggregator
     IStrategyDataAggregator internal constant aggregator =
@@ -113,23 +108,9 @@ contract YearnHarvest {
     );
 
     constructor() public {
-        _initialize(msg.sender, msg.sender, msg.sender);
-    }
-
-    // REVIEW: If you don't use clone, there is no need of an _initialize method.
-    // When there is a clone, initialize is public and is called after deployment/clone
-    function _initialize(
-        address _owner,
-        address _management,
-        address payable _governance
-    ) internal {
-        owner = _owner;
-        management = _management;
-        governance = _governance;
-    }
-
-    function getLastRun(address strategy) external view returns (uint256) {
-        return lastRun[strategy];
+        owner = msg.sender;
+        management = msg.sender;
+        governance = msg.sender;
     }
 
     /**
@@ -139,7 +120,7 @@ contract YearnHarvest {
     (via harvestTrigger()), and attempts a non-state-changing harvest() when the strategy
     trigger returns TRUE.
     Even if the trigger is TRUE and the simulated call to harvest() is succesful, certain
-    stragegies may have not needed to be harvested (e.g., Total Assets == 0,
+    strategies may have not needed to be harvested (e.g., Total Assets == 0,
     Last run < 10 minutes ago, etc.). This is why we encourage strategists that would like
     to rely on yHarvest for automation to ensure their triggers are accurate to avoid
     unnecesary calls to harvest and the cost associated with it.
@@ -158,64 +139,42 @@ contract YearnHarvest {
         // Pull list of active strategies in production
         address[] memory strategies = aggregator.assetsStrategiesAddresses();
 
-        // Declare a strategy object
+        // Declare a strategy objects
         StrategyAPI strategy_i;
+        StrategyParams memory params_i;
+
+        // Last time the strategy was harvested.
+        uint256 lastReport;
 
         // `callCostInWei` is a required input to the `harvestTrigger()` method of the strategy
-        // and represents the expected cost to call `harvest()`. Gelato does not currently
-        // passes the tx fee it charges to the checker function so we are not able to assess
-        // the economic feasibility of the tx here. For now, yHarvest uses a common,
-        // fixed cost accross strategies -- `callCostInWei`. A future improvement could
-        // include an on-chain estimate.
-        //
-        // Because of this drawback in the checker function, the executing function --
-        // `harvestStrategy()` -- runs `harvestTrigger()` again with the tx fee `gelatoFee`,
-        // which IS available in such function. This is not ideal as it adds a cost in the
-        // executing function that could be completely avoided if such information would
-        // be available in the checker function.
-
-        uint256 callCostInWei = 1e8; // low value so that the trigger focuses on all other conditions
+        // and represents the expected cost to call `harvest()`. Fantom does not currently
+        // offer the same global variables/functions that we have in mainnet -- block.basefee or
+        // gasUsed() -- to estimate the cost to harvest.
+        // For now, yHarvest uses a common, fixed cost accross strategies -- `callCostInWei`.
+        // We assign `callCostInWei` a low value so that the trigger focuses on all other conditions.
+        uint256 callCostInWei = 1e8;
 
         // Check active strategies and return the first one that is ready to harvest.
-
-        // REVIEW: Two issues of iterating over ALL strategies I can think of:
-        // 1) You might run out of gas. If there are enough reverting harvest
-        // strategies, the method might consume all the gas.
-        //
-        // 2) You are forcing an order in the harvest procedure.
-        // Not an issue per se, but might be an attack vector
-        //
-        // I would prefer this logic to live on keepers logic, perhaps offering
-        // this helper method but separated in two:
-        // a) getAllHarvestableStrategies()
-        // b) CheckIfHarvestable()
-        //
-        // On the other hand, we know that keepers check in a fork before sending
-        // to avoid reverts, but I don't know if gelato offers that.
-        //
         for (uint256 i = 0; i < strategies.length; i++) {
-            // When `minReportDelay` is zero at the strategy level, it's possible that
-            // harvestTrigger() could return TRUE. If that were the case, checkHarvestStatus() could
-            // find itself returning the same strategy, preventing other strategies that
-            // need to be harvest from doing so.
-            // We must track, then, when a strategy was last harvested to avoid this
-            // situation. We require that a strategy is not run more often than `runMaxTime`.
-            if (now.sub(lastRun[strategies[i]]) < runMaxTime) continue;
-
             // Define `strategy_i`
             strategy_i = StrategyAPI(strategies[i]);
+
+            params_i = VaultAPI(strategy_i.vault()).strategies(strategies[i]);
+
+            // When `minReportDelay` is zero at the strategy level, it's possible that
+            // harvestTrigger() could return TRUE. If that were the case, checkHarvestStatus()
+            // could find itself returning the same strategy, preventing other strategies that
+            // need to be harvest from doing so.
+            // To avoid this, we require that a strategy is not run more often than `runMaxTime`.
+            lastReport = params_i.lastReport;
+
+            if (now.sub(lastReport) < runMaxTime) continue;
 
             // To enable automatic harvest() calls, a strategy must have the Yearn Harvest
             // contract as the keeper.
             if (strategy_i.keeper() != address(this)) continue;
 
-            // Gelato does not currently accept input parameters in the checkHarvestStatus()
-            // method, but harvestTrigger() requires one. For now we pass `callCostInWei`, which
-            // is a constant used accross all strategies.
-            // Note, however, that `gelatoFee` in the `harvestStrategy()` method is used to
-            // run the `harvestTrigger()` method again to ensure the tx makes economic
-            // sense. Running the trigger in that method is not ideal, however, because it's
-            // not gas-efficient.
+            // call the harvest trigger
             canExec = strategy_i.harvestTrigger(callCostInWei);
 
             // call harvest() and see if it reverts. If it does, move on to the next strategy.
@@ -236,11 +195,19 @@ contract YearnHarvest {
     @notice This is the executable method that Gelato keepers call to harvest a strategy.
     It checks that the executors are getting paid in the expected crytocurrency and that
     they do not overcharge for the tx. The method also pays executors.
-    @param strategy Strategy to harvest
+    @param strategyAddress Strategy address to harvest
     */
-    function harvestStrategy(address strategy) public onlyKeepers {
+    function harvestStrategy(address strategyAddress) public onlyKeepers {
         require(isActive, "!active");
-        require(now.sub(lastRun[strategy]) > runMaxTime, "!time");
+
+        StrategyAPI strategy = StrategyAPI(strategyAddress);
+        StrategyParams memory params = VaultAPI(strategy.vault()).strategies(
+            strategyAddress
+        );
+
+        uint256 lastReport = params.lastReport;
+
+        require(now.sub(lastReport) > runMaxTime, "!time");
 
         // `gelatoFee` and `gelatoFeeToken` are state variables in the gelato contract that
         // are temporarily modified by the executors before executing the payload. They are
@@ -250,22 +217,25 @@ contract YearnHarvest {
         require(gelatoFeeToken == feeToken, "!token"); // dev: gelato not using intended token
         require(gelatoFee <= maxFee, "!fee"); // dev: gelato executor overcharnging for the tx
 
-        // REVIEW: To avoid this variable you can read lastRun from:
-        // vault.strategies(strategy)
-        lastRun[strategy] = now;
+        // Re-run harvestTrigger() with the gelatoFee passed by the executor to ensure
+        // the tx makes economic sense, and that harvestStrategy() is only called when
+        // conditions are met. Not checking conditions in the exec function could in
+        // theory allow an executor to attempt to run a harvest when checkHarvestStatus()
+        // might not be proposing such tx.
+        require(StrategyAPI(strategy).harvestTrigger(gelatoFee), "!economic");
 
-        // The checker method `checkHarvestStatus()` does not currently factor in whether it
-        // makes economic sense to harvest (e.g., profit > hatvest tx cost). This is because
-        // we don't have access to `gelatoFee` in that method.
-        // require(StrategyAPI(strategy).harvestTrigger(gelatoFee), "!economic");
-
-        StrategyAPI(strategy).harvest();
+        strategy.harvest();
 
         // Pay Gelato for the service.
         // REVIEW we should discuss reentracy issues
         payKeeper(gelatoFee);
 
-        emit HarvestedByGelato(jobId, strategy, gelatoFeeToken, gelatoFee);
+        emit HarvestedByGelato(
+            jobId,
+            strategyAddress,
+            gelatoFeeToken,
+            gelatoFee
+        );
     }
 
     /**
@@ -344,7 +314,10 @@ contract YearnHarvest {
 
     @param _governance The address requested to take over Vault governance.
     */
-    function setGovernance(address payable _governance) external onlyGovernance {
+    function setGovernance(address payable _governance)
+        external
+        onlyGovernance
+    {
         pendingGovernance = _governance;
     }
 
@@ -381,8 +354,6 @@ contract YearnHarvest {
             SafeERC20.safeTransfer(IERC20(_token), governance, amount);
         }
     }
-
-    // REVIEW: Sometimes we add a sweepETH as well.
 
     // enables the contract to receive native crypto (ETH, FTM, AETH, etc)
     receive() external payable {}

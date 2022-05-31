@@ -1,4 +1,4 @@
-from brownie import YearnHarvester, accounts, network, Contract, web3
+from brownie import YearnHarvest, accounts, network, Contract, web3, Wei
 from eth_utils import is_checksum_address
 import click
 
@@ -28,11 +28,22 @@ def main():
     print(f"You are using: 'owner' [{owner.address}]")
 
     publish_source = click.confirm("Verify source on etherscan?")
-    if input("Deploy Strategy? y/[N]: ").lower() != "y":
-        return
 
-    yHarvest = YearnHarvester.deploy({"from": owner}, publish_source=publish_source)
+    yHarvest = YearnHarvest.deploy({"from": owner}, publish_source=publish_source)
 
     strategy = Contract("0xA9a904B5567b5AFfb6bB334bea2f90F700EB221a")
 
     strategy.setKeeper(yHarvest.address, {"from": owner})
+
+    # Run every 4 hours at a minimum
+    strategy.setMinReportDelay(60 * 60 * 4, {"from": owner})
+
+    # Fund the yHarvest contract
+    owner.transfer(yHarvest, "5 ether")
+
+    assert yHarvest.balance() == Wei("5 ether")
+
+    # Create Gelato job
+    tx = yHarvest.createKeeperJob()
+
+    tx.info()

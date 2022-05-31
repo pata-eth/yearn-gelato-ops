@@ -140,7 +140,7 @@ def test_checker(
     # revert action
     chain.undo()
 
-    # Harvest again via the Yearn Harvester
+    # Harvest again via yHarvest
     tx_gelato = gelato.exec(
         gelatoFee,
         yHarvest.feeToken(),
@@ -159,7 +159,7 @@ def test_checker(
     # revert action
     chain.undo()
 
-    # Yearn Harvester must be set as the strategy's keeper. Otherwise it'll revert.
+    # Yearn Harvest must be set as the strategy's keeper. Otherwise it'll revert.
     strategy.setKeeper(accounts[0], {"from": owner})
 
     with reverts():
@@ -175,7 +175,7 @@ def test_checker(
             {"from": gelato.gelato()},
         )
 
-    # If the the strategy's keeper is not the Yearn Harvester, then it stops
+    # If the the strategy's keeper is not yHarvest, then it stops
     # showing up in the resolver
     [canExec, execData] = yHarvest.checkHarvestStatus.call({"from": gelato.gelato()})
 
