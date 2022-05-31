@@ -9,10 +9,9 @@ def isolation(fn_isolation):
 
 @pytest.fixture(scope="module")
 def aggregator():
-    aggregator = interface.IStrategyDataAggregator(
+    yield interface.IStrategyDataAggregator(
         "0x97D0bE2a72fc4Db90eD9Dbc2Ea7F03B4968f6938"
     )
-    yield aggregator
 
 
 # This is controlled by Gelato.
@@ -59,8 +58,7 @@ def yHarvest(
 
 @pytest.fixture(scope="function")
 def gelato():
-    gelato = interface.IGelatoOps("0x6EDe1597c05A0ca77031cBA43Ab887ccf24cd7e8")
-    yield gelato
+    yield interface.IGelatoOps("0x6EDe1597c05A0ca77031cBA43Ab887ccf24cd7e8")
 
 
 # Fantom Curve Tricrypto
@@ -79,39 +77,33 @@ def ftm_amount():
 
 @pytest.fixture(scope="module")
 def crv():
-    crv = interface.ERC20("0x1E4F97b9f9F913c46F1632781732927B9019C68b")
-    yield crv
+    yield interface.ERC20("0x1E4F97b9f9F913c46F1632781732927B9019C68b")
 
 
 @pytest.fixture(scope="module")
 def native():
-    native = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
-    yield native
+    yield "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
 
 
 # Define any accounts in this section
 @pytest.fixture(scope="module")
 def gov(accounts):
-    gov = accounts.at("0xC0E2830724C946a6748dDFE09753613cd38f6767", force=True)
-    yield gov
+    yield accounts.at("0xC0E2830724C946a6748dDFE09753613cd38f6767", force=True)
 
 
 @pytest.fixture(scope="module")
 def strategist_ms(accounts):
     # like governance, but better
-    strategist_ms = accounts.at(
+    yield accounts.at(
         "0x72a34AbafAB09b15E7191822A679f28E067C4a16", force=True
     )
-    yield strategist_ms
 
 
 @pytest.fixture(scope="module")
 def owner(accounts):
-    owner = accounts.at("0x2757AE02F65dB7Ce8CF2b2261c58f07a0170e58e", force=True)
-    yield owner
+    yield accounts.at("0x2757AE02F65dB7Ce8CF2b2261c58f07a0170e58e", force=True)
 
 
 @pytest.fixture(scope="module")
 def whale_ftm(accounts):
-    whale_ftm = accounts.at("0x431e81E5dfB5A24541b5Ff8762bDEF3f32F96354", force=True)
-    yield whale_ftm
+    yield accounts.at("0x431e81E5dfB5A24541b5Ff8762bDEF3f32F96354", force=True)

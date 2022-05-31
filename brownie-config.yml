@@ -1,6 +1,6 @@
 dotenv: .env
 
-# degault ganache network
+# default ganache network
 networks:
     default: ftm-main-fork
 

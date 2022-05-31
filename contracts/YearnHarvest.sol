@@ -2,12 +2,12 @@
 pragma solidity 0.6.12;
 pragma experimental ABIEncoderV2;
 
-/** 
+/**
 @title Yearn Harvest
 @author yearn.finance
-@notice Yearn Harvest or yHarvest is a smart contract that leverages Gelato to automate 
-the harvest of stragegies that have yHarvest assigned as its keeper. 
-The contract provides the Gelato network of keepers Yearn harvest jobs that 
+@notice Yearn Harvest or yHarvest is a smart contract that leverages Gelato to automate
+the harvest of stragegies that have yHarvest assigned as its keeper.
+The contract provides the Gelato network of keepers Yearn harvest jobs that
 are ready to execute, and it pays Gelato after a succesful harvest.
 */
 
@@ -52,11 +52,11 @@ contract YearnHarvest {
     // `runMaxTime` determines the minimum amount of time that's needed in-between
     // calls to harvest(). The analogous param `minReportDelay` in the strategy is
     // often left at 0, which becomes a problem for yHarvest as the checkHarvestStatus()
-    // method in the yHarvest contract would always propose the same stragegy to
+    // method in the yHarvest contract would always propose the same strategy to
     // be harvested.
     uint256 public runMaxTime = 6 hours;
 
-    // `lastRun` keeps track of the time at which a stragegy was last harvested, and
+    // `lastRun` keeps track of the time at which a strategy was last harvested, and
     // allows us to determine along with `runMaxTime` whether yHarvest should
     // propose Gelato a strategy to be harvested.
     mapping(address => uint256) internal lastRun;
@@ -116,6 +116,8 @@ contract YearnHarvest {
         _initialize(msg.sender, msg.sender, msg.sender);
     }
 
+    // REVIEW: If you don't use clone, there is no need of an _initialize method.
+    // When there is a clone, initialize is public and is called after deployment/clone
     function _initialize(
         address _owner,
         address _management,
@@ -132,14 +134,14 @@ contract YearnHarvest {
 
     /**
     @notice Used by keepers to check whether a job is ready to run. IMPORTANT: keepers
-    are expected to call checkHarvestStatus() as a static, "view" call off-chain. 
-    @dev The method relies on each strategy to determine whether it's ready for harvest 
-    (via harvestTrigger()), and attempts a non-state-changing harvest() when the strategy 
+    are expected to call checkHarvestStatus() as a static, "view" call off-chain.
+    @dev The method relies on each strategy to determine whether it's ready for harvest
+    (via harvestTrigger()), and attempts a non-state-changing harvest() when the strategy
     trigger returns TRUE.
     Even if the trigger is TRUE and the simulated call to harvest() is succesful, certain
-    stragegies may have not needed to be harvested (e.g., Total Assets == 0, 
-    Last run < 10 minutes ago, etc.). This is why we encourage strategists that would like 
-    to rely on yHarvest for automation to ensure their triggers are accurate to avoid 
+    stragegies may have not needed to be harvested (e.g., Total Assets == 0,
+    Last run < 10 minutes ago, etc.). This is why we encourage strategists that would like
+    to rely on yHarvest for automation to ensure their triggers are accurate to avoid
     unnecesary calls to harvest and the cost associated with it.
     @return canExec boolean indicating whether the strategy is ready to harvest()
     @return execPayload call data used by Gelato executors to call harvestStrategy(). It
@@ -175,6 +177,22 @@ contract YearnHarvest {
         uint256 callCostInWei = 1e8; // low value so that the trigger focuses on all other conditions
 
         // Check active strategies and return the first one that is ready to harvest.
+
+        // REVIEW: Two issues of iterating over ALL strategies I can think of:
+        // 1) You might run out of gas. If there are enough reverting harvest
+        // strategies, the method might consume all the gas.
+        //
+        // 2) You are forcing an order in the harvest procedure.
+        // Not an issue per se, but might be an attack vector
+        //
+        // I would prefer this logic to live on keepers logic, perhaps offering
+        // this helper method but separated in two:
+        // a) getAllHarvestableStrategies()
+        // b) CheckIfHarvestable()
+        //
+        // On the other hand, we know that keepers check in a fork before sending
+        // to avoid reverts, but I don't know if gelato offers that.
+        //
         for (uint256 i = 0; i < strategies.length; i++) {
             // When `minReportDelay` is zero at the strategy level, it's possible that
             // harvestTrigger() could return TRUE. If that were the case, checkHarvestStatus() could
@@ -200,7 +218,7 @@ contract YearnHarvest {
             // not gas-efficient.
             canExec = strategy_i.harvestTrigger(callCostInWei);
 
-            // call harvest() and see if it reverts. If it does, move on to the next stragegy.
+            // call harvest() and see if it reverts. If it does, move on to the next strategy.
             // If it does not, break loop and return output parameters.
             if (canExec) {
                 try strategy_i.harvest() {
@@ -215,7 +233,7 @@ contract YearnHarvest {
     }
 
     /**
-    @notice This is the executable method that Gelato keepers call to harvest a strategy. 
+    @notice This is the executable method that Gelato keepers call to harvest a strategy.
     It checks that the executors are getting paid in the expected crytocurrency and that
     they do not overcharge for the tx. The method also pays executors.
     @param strategy Strategy to harvest
@@ -232,6 +250,8 @@ contract YearnHarvest {
         require(gelatoFeeToken == feeToken, "!token"); // dev: gelato not using intended token
         require(gelatoFee <= maxFee, "!fee"); // dev: gelato executor overcharnging for the tx
 
+        // REVIEW: To avoid this variable you can read lastRun from:
+        // vault.strategies(strategy)
         lastRun[strategy] = now;
 
         // The checker method `checkHarvestStatus()` does not currently factor in whether it
@@ -242,6 +262,7 @@ contract YearnHarvest {
         StrategyAPI(strategy).harvest();
 
         // Pay Gelato for the service.
+        // REVIEW we should discuss reentracy issues
         payKeeper(gelatoFee);
 
         emit HarvestedByGelato(jobId, strategy, gelatoFeeToken, gelatoFee);
@@ -259,8 +280,8 @@ contract YearnHarvest {
     }
 
     /**
-    @notice Create Gelato job. The job and resolver address are the same -- the 
-    Yearn Harvest contract. Updates `jobId`, which we use to log events and 
+    @notice Create Gelato job. The job and resolver address are the same -- the
+    Yearn Harvest contract. Updates `jobId`, which we use to log events and
     to manage the job.
     */
     function createKeeperJob() external onlyAuthorized {
@@ -283,18 +304,19 @@ contract YearnHarvest {
         ops.cancelTask(jobId);
         delete isActive; // return to default value => false
         delete jobId; // return to default value => TODO
+        // REVIEW: isActive = false; ?
     }
 
     /**
     @notice Set the max fee we allow Gelato to charge for a harvest
-    @param _maxFee Max fee we allow Gelato to charge for a harvest. 
+    @param _maxFee Max fee we allow Gelato to charge for a harvest.
     */
     function setMaxFee(uint256 _maxFee) external onlyAuthorized {
         maxFee = _maxFee;
     }
 
     /**
-    @notice Used to change `owner`. 
+    @notice Used to change `owner`.
     @param _owner The new address to assign as `owner`.
     */
     function setOwner(address _owner) external onlyAuthorized {
@@ -303,7 +325,7 @@ contract YearnHarvest {
     }
 
     /**
-    @notice Used to change `management`. 
+    @notice Used to change `management`.
     @param _management The new address to assign as `management`.
     */
     function setManagement(address _management) external onlyAuthorized {
@@ -322,8 +344,7 @@ contract YearnHarvest {
 
     @param _governance The address requested to take over Vault governance.
     */
-    function setGovernance(address payable _governance) external {
-        require(msg.sender == governance, "!authorized");
+    function setGovernance(address payable _governance) external onlyGovernance {
         pendingGovernance = _governance;
     }
 
@@ -360,6 +381,8 @@ contract YearnHarvest {
             SafeERC20.safeTransfer(IERC20(_token), governance, amount);
         }
     }
+
+    // REVIEW: Sometimes we add a sweepETH as well.
 
     // enables the contract to receive native crypto (ETH, FTM, AETH, etc)
     receive() external payable {}
