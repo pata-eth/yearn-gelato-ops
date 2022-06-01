@@ -36,14 +36,14 @@ def main():
     strategy.setKeeper(yHarvest.address, {"from": owner})
 
     # Run every 4 hours at a minimum
-    strategy.setMinReportDelay(60 * 60 * 4, {"from": owner})
+    # strategy.setMinReportDelay(60 * 60 * 4, {"from": owner})
 
     # Fund the yHarvest contract
-    owner.transfer(yHarvest, "5 ether")
+    owner.transfer(yHarvest, "15 ether")
 
-    assert yHarvest.balance() == Wei("5 ether")
+    assert yHarvest.balance() == Wei("15 ether")
 
     # Create Gelato job
-    tx = yHarvest.createKeeperJob()
+    tx = yHarvest.initiateStrategyMonitor()
 
     tx.info()

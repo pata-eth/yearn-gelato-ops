@@ -14,12 +14,6 @@ def aggregator():
     )
 
 
-# This is controlled by Gelato.
-@pytest.fixture(scope="module")
-def revertOnFailure():
-    yield True
-
-
 # `baseFee` is provided to harvestTrigger() in the checker function
 # as the actual fee is not available there
 @pytest.fixture(scope="module")

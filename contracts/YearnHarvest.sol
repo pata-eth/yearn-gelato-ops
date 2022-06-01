@@ -33,28 +33,19 @@ contract YearnHarvest {
     using Address for address;
     using SafeMath for uint256;
 
-    // `jobId` keeps track of the Gelato job ID
-    bytes32 public jobId;
-
-    // `isActive` indicates whether yHarvest is active. yHarvest is
-    // inactive at deployment, activates after creating a job with Gelato, and
-    // deactivates after canceling a job with Gelato.
-    bool public isActive;
+    // `jobIds` keeps track of the Gelato job IDs for each strategy and
+    // the yHarvest contract
+    mapping(address => bytes32) public jobIds;
 
     // `feeToken` is the crypto used for payment.
     address public constant feeToken =
         0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
     // `maxFee` determines the max fee allowed to be paid to Gelato
-    // denominated in `feeToken`
+    // denominated in `feeToken`. Note that setting it to 0 would
+    // effectively present all executors from running any task.
+    // To do so, call `setMaxFee()`
     uint256 public maxFee = 1e18;
-
-    // `runMaxTime` determines the minimum amount of time that's needed in-between
-    // calls to harvest(). The analogous param `minReportDelay` in the strategy is
-    // often left at 0, which becomes a problem for yHarvest as the checkHarvestStatus()
-    // method in the yHarvest contract would always propose the same strategy to
-    // be harvested.
-    uint256 public runMaxTime = 3 hours;
 
     // Yearn Lens data aggregator
     IStrategyDataAggregator internal constant aggregator =
@@ -114,80 +105,141 @@ contract YearnHarvest {
     }
 
     /**
-    @notice Used by keepers to check whether a job is ready to run. IMPORTANT: keepers
-    are expected to call checkHarvestStatus() as a static, "view" call off-chain.
-    @dev The method relies on each strategy to determine whether it's ready for harvest
-    (via harvestTrigger()), and attempts a non-state-changing harvest() when the strategy
-    trigger returns TRUE.
-    Even if the trigger is TRUE and the simulated call to harvest() is succesful, certain
-    strategies may have not needed to be harvested (e.g., Total Assets == 0,
-    Last run < 10 minutes ago, etc.). This is why we encourage strategists that would like
-    to rely on yHarvest for automation to ensure their triggers are accurate to avoid
-    unnecesary calls to harvest and the cost associated with it.
+    @notice Create Gelato job that will monitor new strategies in Yearn Lens. When
+    a new startegy is detected with its keeper set as yHarvest, yHarvest creates a
+    gelato job for it. 
+    */
+    function initiateStrategyMonitor() external onlyAuthorized {
+        jobIds[address(this)] = ops.createTaskNoPrepayment(
+            address(this), // `execAddress`
+            this.createJobAndPay.selector, // `execSelector`
+            address(this), // `resolverAddress`
+            abi.encodeWithSelector(this.checkNewStrategies.selector),
+            feeToken
+        );
+    }
+
+    /**
+    @notice Creates Gelato job for a strategy. The job and resolver address are the same -- the
+    Yearn Harvest contract. Updates `jobIds`, which we use to log events and
+    to manage the job.
+    @param strategyAddress Strategy Address for which a job will be created
+    */
+    function createJobAndPay(address strategyAddress) external onlyKeepers {
+        createJob(strategyAddress);
+
+        // `gelatoFee` and `gelatoFeeToken` are state variables in the gelato contract that
+        // are temporarily modified by the executors before executing the payload. They are
+        // reverted to default values when the gelato contract exec() method wraps up.
+        (uint256 gelatoFee, address gelatoFeeToken) = ops.getFeeDetails();
+
+        require(gelatoFeeToken == feeToken, "!token"); // dev: gelato not using intended token
+        require(gelatoFee <= maxFee, "!fee"); // dev: gelato executor overcharnging for the tx
+
+        // Pay Gelato for the service.
+        payKeeper(gelatoFee);
+    }
+
+    /**
+    @notice Like `createJobAndPay()` but without payment. We can use this function to 
+    manually create new jobs, if needed (for example, if we have to maually cancel any
+    and re-start it afterwards). 
+    @param strategyAddress Strategy Address for which a job will be created
+    */
+    function createJob(address strategyAddress) public onlyKeepers {
+        jobIds[strategyAddress] = ops.createTaskNoPrepayment(
+            address(this), // `execAddress`
+            this.harvestStrategy.selector, // `execSelector`
+            address(this), // `resolverAddress`
+            abi.encodeWithSelector(
+                this.checkHarvestStatus.selector,
+                strategyAddress
+            ),
+            feeToken
+        );
+    }
+
+    /**
+    @notice Cancel a Gelato job given a strategy address
+    @dev cancelJob(address(this)) cancels the strategy monitor job
+    @param strategyAddress Strategy for which to cancel a job
+    */
+    function cancelJob(address strategyAddress) external onlyAuthorized {
+        require(jobIds[strategyAddress] != 0, "!exist");
+        bytes32 jobId = jobIds[strategyAddress];
+        ops.cancelTask(jobId);
+        delete jobIds[strategyAddress];
+    }
+
+    /**
+    @notice Used by keepers to determine whether a new strategy was added to Yearn Lens
+    that has the yHarvest contract as its keeper.
+    @return canExec boolean indicating whether a new strategy requires automation.
+    @return execPayload call data used by Gelato executors to call createJob(). It
+    includes the address of the strategy to harvest.
+    */
+    function checkNewStrategies()
+        external
+        view
+        returns (bool canExec, bytes memory execPayload)
+    {
+        // Pull list of active strategies in production
+        address[] memory strategies = aggregator.assetsStrategiesAddresses();
+
+        // Check active strategies and return the first one that is ready to harvest.
+        for (uint256 i = 0; i < strategies.length; i++) {
+            // To enable automatic harvest() calls, a strategy must have the Yearn Harvest
+            // contract as the keeper.
+            if (StrategyAPI(strategies[i]).keeper() != address(this)) continue;
+
+            if (jobIds[strategies[i]] == 0) {
+                canExec = true;
+                execPayload = execPayload = abi.encodeWithSelector(
+                    this.createJobAndPay.selector,
+                    strategies[i]
+                );
+                break;
+            }
+        }
+    }
+
+    /**
+    @notice Used by keepers to check whether a strategy is ready to harvest. 
+    @param strategyAddress Strategy for which to obtain a harvest status
     @return canExec boolean indicating whether the strategy is ready to harvest()
     @return execPayload call data used by Gelato executors to call harvestStrategy(). It
     includes the address of the strategy to harvest.
     */
-    function checkHarvestStatus()
+    function checkHarvestStatus(address strategyAddress)
         external
-        onlyKeepers
+        view
         returns (bool canExec, bytes memory execPayload)
     {
-        // If yHarvest is inactive, don't provide any jobs to keepers/executors
-        if (!isActive) return (canExec, execPayload);
-
-        // Pull list of active strategies in production
-        address[] memory strategies = aggregator.assetsStrategiesAddresses();
+        require(jobIds[strategyAddress] != 0, "!job");
 
         // Declare a strategy objects
-        StrategyAPI strategy_i;
-        StrategyParams memory params_i;
+        StrategyAPI strategy = StrategyAPI(strategyAddress);
 
-        // Last time the strategy was harvested.
-        uint256 lastReport;
+        // To enable automatic harvest() calls, a strategy must have the yHarvest
+        // contract as the keeper.
+        if (strategy.keeper() != address(this)) return (canExec, execPayload);
 
         // `callCostInWei` is a required input to the `harvestTrigger()` method of the strategy
         // and represents the expected cost to call `harvest()`. Fantom does not currently
         // offer the same global variables/functions that we have in mainnet -- block.basefee or
         // gasUsed() -- to estimate the cost to harvest.
-        // For now, yHarvest uses a common, fixed cost accross strategies -- `callCostInWei`.
-        // We assign `callCostInWei` a low value so that the trigger focuses on all other conditions.
-        uint256 callCostInWei = 1e8;
+        // For now, yHarvest uses a common, low fixed cost accross strategies so that the trigger
+        // focuses on all other conditions
 
-        // Check active strategies and return the first one that is ready to harvest.
-        for (uint256 i = 0; i < strategies.length; i++) {
-            // Define `strategy_i`
-            strategy_i = StrategyAPI(strategies[i]);
+        // call the harvest trigger
+        canExec = strategy.harvestTrigger(uint256(1e8));
 
-            params_i = VaultAPI(strategy_i.vault()).strategies(strategies[i]);
-
-            // When `minReportDelay` is zero at the strategy level, it's possible that
-            // harvestTrigger() could return TRUE. If that were the case, checkHarvestStatus()
-            // could find itself returning the same strategy, preventing other strategies that
-            // need to be harvest from doing so.
-            // To avoid this, we require that a strategy is not run more often than `runMaxTime`.
-            lastReport = params_i.lastReport;
-
-            if (now.sub(lastReport) < runMaxTime) continue;
-
-            // To enable automatic harvest() calls, a strategy must have the Yearn Harvest
-            // contract as the keeper.
-            if (strategy_i.keeper() != address(this)) continue;
-
-            // call the harvest trigger
-            canExec = strategy_i.harvestTrigger(callCostInWei);
-
-            // call harvest() and see if it reverts. If it does, move on to the next strategy.
-            // If it does not, break loop and return output parameters.
-            if (canExec) {
-                try strategy_i.harvest() {
-                    execPayload = abi.encodeWithSelector(
-                        this.harvestStrategy.selector,
-                        strategies[i]
-                    );
-                    break;
-                } catch {}
-            }
+        // If we can execute, prepare the payload
+        if (canExec) {
+            execPayload = abi.encodeWithSelector(
+                this.harvestStrategy.selector,
+                strategyAddress
+            );
         }
     }
 
@@ -198,16 +250,9 @@ contract YearnHarvest {
     @param strategyAddress Strategy address to harvest
     */
     function harvestStrategy(address strategyAddress) public onlyKeepers {
-        require(isActive, "!active");
+        require(jobIds[strategyAddress] != 0, "!job");
 
         StrategyAPI strategy = StrategyAPI(strategyAddress);
-        StrategyParams memory params = VaultAPI(strategy.vault()).strategies(
-            strategyAddress
-        );
-
-        uint256 lastReport = params.lastReport;
-
-        require(now.sub(lastReport) > runMaxTime, "!time");
 
         // `gelatoFee` and `gelatoFeeToken` are state variables in the gelato contract that
         // are temporarily modified by the executors before executing the payload. They are
@@ -219,19 +264,16 @@ contract YearnHarvest {
 
         // Re-run harvestTrigger() with the gelatoFee passed by the executor to ensure
         // the tx makes economic sense, and that harvestStrategy() is only called when
-        // conditions are met. Not checking conditions in the exec function could in
-        // theory allow an executor to attempt to run a harvest when checkHarvestStatus()
-        // might not be proposing such tx.
-        require(StrategyAPI(strategy).harvestTrigger(gelatoFee), "!economic");
+        // conditions are met.
+        require(strategy.harvestTrigger(gelatoFee), "!economic");
 
         strategy.harvest();
 
         // Pay Gelato for the service.
-        // REVIEW we should discuss reentracy issues
         payKeeper(gelatoFee);
 
         emit HarvestedByGelato(
-            jobId,
+            jobIds[strategyAddress],
             strategyAddress,
             gelatoFeeToken,
             gelatoFee
@@ -247,34 +289,6 @@ contract YearnHarvest {
 
         (bool success, ) = gelato.call{value: gelatoFee}("");
         require(success, "!transfer");
-    }
-
-    /**
-    @notice Create Gelato job. The job and resolver address are the same -- the
-    Yearn Harvest contract. Updates `jobId`, which we use to log events and
-    to manage the job.
-    */
-    function createKeeperJob() external onlyAuthorized {
-        jobId = ops.createTaskNoPrepayment(
-            address(this), // `execAddress` - contract where the method to execute resides
-            this.harvestStrategy.selector, // `execSelector` - Signature of the method to call
-            address(this), // `resolverAddress` - contract that contains the checkHarvestStatus() method
-            abi.encodeWithSelector(this.checkHarvestStatus.selector), // call data to check harvest status
-            feeToken
-        );
-
-        isActive = true;
-    }
-
-    /**
-    @notice Cancel Gelato job used by yHarvest, which resets `jobId`
-    and `isActive` to default values.
-    */
-    function cancelKeeperJob() external onlyAuthorized {
-        ops.cancelTask(jobId);
-        delete isActive; // return to default value => false
-        delete jobId; // return to default value => TODO
-        // REVIEW: isActive = false; ?
     }
 
     /**

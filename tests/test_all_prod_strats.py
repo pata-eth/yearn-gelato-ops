@@ -1,4 +1,4 @@
-from brownie import Contract, convert
+from brownie import Contract, accounts, chain, reverts
 
 
 def test_all_strategies(
@@ -8,14 +8,13 @@ def test_all_strategies(
     gov,
     baseFee,
     gelatoFee,
-    revertOnFailure,
 ):
 
     # Get a list of active strategies in production
     strategies = aggregator.assetsStrategiesAddresses()
 
     # Create Gelato job
-    tx = yHarvest.createKeeperJob()
+    tx = yHarvest.initiateStrategyMonitor()
 
     resolverHash = tx.events[0][0]["resolverHash"]
 
@@ -23,36 +22,68 @@ def test_all_strategies(
     # and execute when strat is harvestable
     for i in range(0, len(strategies)):
         strat_i = Contract(strategies[i])
-        strat_i.setKeeper(yHarvest, {"from": gov})
+        assets_i = strat_i.estimatedTotalAssets()
         # print(f"Strategy {strategies[i]} has {strat_i.estimatedTotalAssets()/10**18:_} in assets.\n")
-        assert strat_i.keeper() == yHarvest
+        if assets_i > 0:
+            strat_i.setKeeper(yHarvest, {"from": gov})
+            assert strat_i.keeper() == yHarvest
 
-    # Check if there are harvest jobs to run
-    [canExec, execData] = yHarvest.checkHarvestStatus.call({"from": gelato.gelato()})
+    # Simulate Gelato executors and create a job for each strategy
+    [canExec, execData] = yHarvest.checkNewStrategies.call({"from": accounts[0]})
 
     while canExec:
-        stratAddress = convert.to_address("0x" + execData.hex()[-40:])
-        strat_i = Contract(stratAddress)
-        isHarvestable = strat_i.harvestTrigger(baseFee)
-        assert isHarvestable, "Contract and pytest params do not match"
-        tx_i = gelato.exec(
+        gelato.exec(
             gelatoFee,
             yHarvest.feeToken(),
             yHarvest.address,
             False,  # do not use Gelato Treasury for payment
-            revertOnFailure,
+            True,
             resolverHash,
             yHarvest.address,
             execData,
             {"from": gelato.gelato()},
         )
 
-        assert "HarvestedByGelato" in tx_i.events
+        [canExec, execData] = yHarvest.checkNewStrategies.call({"from": accounts[0]})
 
-        if "HarvestedByGelato" in tx_i.events:
-            print(f"\033[92mSuccess! {stratAddress} was harvested.\033[0m\n")
+    jobIds = gelato.getTaskIdsByUser(yHarvest)
 
-        # Check if there are more harvest jobs to run
-        [canExec, execData] = yHarvest.checkHarvestStatus.call(
-            {"from": gelato.gelato()}
-        )
+    # Check harvest conditions and attempt to harvest when needed
+    for i in range(0, len(strategies)):
+        strat_i = Contract(strategies[i])
+        assets_i = strat_i.estimatedTotalAssets()
+        if assets_i > 0:
+            assert yHarvest.jobIds(strategies[i]) in jobIds, "Job not created"
+
+            # Check if there are harvest jobs to run
+            [canExec, execData] = yHarvest.checkHarvestStatus.call(
+                strategies[i], {"from": gelato.gelato()}
+            )
+            assert strat_i.harvestTrigger(baseFee) == canExec, "no match"
+
+            if not canExec:
+                continue
+
+            tx_i = gelato.exec(
+                gelatoFee,
+                yHarvest.feeToken(),
+                yHarvest.address,
+                False,  # do not use Gelato Treasury for payment
+                False,  # do not revert
+                gelato.getResolverHash(
+                    yHarvest.address,
+                    yHarvest.checkHarvestStatus.encode_input(strategies[i]),
+                ),
+                yHarvest.address,
+                execData,
+                {"from": gelato.gelato()},
+            )
+
+            if "HarvestedByGelato" in tx_i.events:
+                print(
+                    f"\033[92mSuccess! {strat_i.name()} ({strategies[i]}) was harvested.\033[0m\n"
+                )
+            else:
+                print(
+                    f"\033[91mFailed! {strat_i.name()} ({strategies[i]}) reverts.\033[0m\n"
+                )
