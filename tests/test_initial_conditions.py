@@ -34,8 +34,8 @@ def test_methods(
     crv,
 ):
 
-    # Revert is we try to cancel a non-existent job
-    with reverts("!exist"):
+    # Revert if we try to cancel a non-existent job
+    with reverts():
         yHarvest.cancelJob(yHarvest, {"from": owner})
 
     with reverts("!authorized"):

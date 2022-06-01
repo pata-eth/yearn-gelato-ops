@@ -15,7 +15,7 @@ def test_schedule_job_native(
     assert yHarvest.address == tx.events[0][0]["resolverAddress"]
     assert yHarvest.address == tx.events[0][0]["taskCreator"]
 
-    assert yHarvest.jobId() == tx.events[0][0]["taskId"]
+    assert yHarvest.jobIds(yHarvest) == tx.events[0][0]["taskId"]
 
     assert (
         tx.events[0][0]["useTaskTreasuryFunds"] == False
@@ -153,8 +153,6 @@ def test_job_creations(
     jobIds = gelato.getTaskIdsByUser(yHarvest)
 
     assert yHarvest.jobIds(strategy) in jobIds, "Job not created"
-
-    assert 1 == 2
 
     resolverHash = tx.events[0][0]["resolverHash"]
 

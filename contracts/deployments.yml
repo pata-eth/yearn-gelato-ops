@@ -1,10 +1,4 @@
 version: 1.0
     arbitrum:
-    fantom: 0xA8D8C5AcB1D8CCe9b21EF79713B776DF2EFA77bB
+    fantom: 0x9AB353057CF41CfbA981a37e6C8F3942cc0147b6
     mainnet:
-
-version: 1.1
-    arbitrum:
-    fantom: 
-    mainnet:
-  
