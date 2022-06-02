@@ -186,14 +186,12 @@ contract YearnHarvest {
         // Pull list of active strategies in production
         address[] memory strategies = aggregator.assetsStrategiesAddresses();
 
-        // Check active strategies and return the first one that is ready to harvest.
+        // Check if there are strategies with yHarvest assigned as keeper
         for (uint256 i = 0; i < strategies.length; i++) {
-            // To enable automatic harvest() calls, a strategy must have the Yearn Harvest
-            // contract as the keeper.
             if (StrategyAPI(strategies[i]).keeper() != address(this)) {
                 continue;
             }
-
+            // Skip if there's an active job already created for the strategy
             if (jobIds[strategies[i]] == 0) {
                 canExec = true;
                 execPayload = execPayload = abi.encodeWithSelector(
@@ -219,10 +217,6 @@ contract YearnHarvest {
     {
         // Declare a strategy object
         StrategyAPI strategy = StrategyAPI(strategyAddress);
-
-        // To enable automatic harvest() calls, a strategy must have the yHarvest
-        // contract as the keeper.
-        if (strategy.keeper() != address(this)) return (canExec, execPayload);
 
         // `callCostInWei` is a required input to the `harvestTrigger()` method of the strategy
         // and represents the expected cost to call `harvest()`. Fantom does not currently
