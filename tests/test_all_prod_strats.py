@@ -1,4 +1,4 @@
-from brownie import Contract, accounts, chain, reverts
+from brownie import Contract, accounts
 
 
 def test_all_strategies(
@@ -8,6 +8,7 @@ def test_all_strategies(
     gov,
     baseFee,
     gelatoFee,
+    native,
 ):
 
     # Get a list of active strategies in production
@@ -34,7 +35,7 @@ def test_all_strategies(
     while canExec:
         gelato.exec(
             gelatoFee,
-            yHarvest.feeToken(),
+            native,
             yHarvest.address,
             False,  # do not use Gelato Treasury for payment
             True,
@@ -66,10 +67,10 @@ def test_all_strategies(
 
             tx_i = gelato.exec(
                 gelatoFee,
-                yHarvest.feeToken(),
+                native,
                 yHarvest.address,
                 False,  # do not use Gelato Treasury for payment
-                False,  # do not revert
+                False,  # do not revert if the tx fails so that the test does not fail
                 gelato.getResolverHash(
                     yHarvest.address,
                     yHarvest.checkHarvestStatus.encode_input(strategies[i]),

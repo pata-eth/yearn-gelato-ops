@@ -15,6 +15,7 @@ def test_strategy_is_active(strategy, aggregator, yHarvest):
 def test_initial_params(
     yHarvest,
     owner,
+    gelato,
     strategist_ms,
     gov,
 ):
@@ -24,6 +25,7 @@ def test_initial_params(
     assert yHarvest.governance() == gov
     assert yHarvest.management() == strategist_ms
     assert yHarvest.pendingGovernance() == ZERO_ADDRESS
+    assert yHarvest.keepers(gelato) == True
 
 
 def test_methods(
@@ -32,6 +34,7 @@ def test_methods(
     owner,
     gov,
     crv,
+    gelato,
 ):
 
     # Revert if we try to cancel a non-existent job
@@ -43,6 +46,9 @@ def test_methods(
 
     with reverts("!authorized"):
         yHarvest.initiateStrategyMonitor({"from": accounts[0]})
+
+    with reverts("!authorized"):
+        yHarvest.initiateStrategyMonitor({"from": gelato})
 
     with reverts("!authorized"):
         yHarvest.acceptGovernance({"from": accounts[0]})
@@ -64,3 +70,9 @@ def test_methods(
     # Can't create the same job twice
     with reverts():
         yHarvest.initiateStrategyMonitor()
+
+    yHarvest.authorizeKeeper(accounts[0], {"from": owner})
+    assert yHarvest.keepers(accounts[0]) == True
+
+    yHarvest.removeKeeper(accounts[0], {"from": owner})
+    assert yHarvest.keepers(accounts[0]) == False

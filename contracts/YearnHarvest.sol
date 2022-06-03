@@ -10,6 +10,9 @@ the harvest of strategies that have yHarvest assigned as its keeper.
 The contract provides the Gelato network of keepers Yearn harvest jobs that
 are ready to execute, and it pays Gelato after a succesful harvest. The contract detects 
 when a new stragegy is using it as its keeper and creates a Gelato job automatically.
+@dev We use Lens to detect new strategies, but Lens does not include strategies that are
+not in a vault's withdrawal queue. This is not expected all the time, but it can happen and
+has happened.
 */
 
 import {SafeMath} from "@openzeppelin/contracts/math/SafeMath.sol";
@@ -39,7 +42,7 @@ contract YearnHarvest {
     mapping(address => bytes32) public jobIds;
 
     // `feeToken` is the crypto used for payment.
-    address public constant feeToken =
+    address internal constant feeToken =
         0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE;
 
     // `maxFee` determines the max fee allowed to be paid to Gelato
@@ -63,15 +66,10 @@ contract YearnHarvest {
     address payable public pendingGovernance;
 
     // Yearn modifiers
-    // Gelato Ops [address(ops)] is the addresses allowed to run 'exec' on the Gelato side
+    mapping(address => bool) public keepers;
+
     modifier onlyKeepers() {
-        require(
-            msg.sender == address(ops) ||
-                msg.sender == owner ||
-                msg.sender == management ||
-                msg.sender == governance,
-            "!keeper"
-        );
+        require(keepers[msg.sender], "!keeper");
         _;
     }
 
@@ -91,17 +89,19 @@ contract YearnHarvest {
     }
 
     // `HarvestedByGelato` is an event we emit when there's a succesful harvest
-    event HarvestedByGelato(
-        bytes32 jobId,
-        address strategy,
-        address gelatoFeeToken,
-        uint256 gelatoFee
-    );
+    event HarvestedByGelato(bytes32 jobId, address strategy, uint256 gelatoFee);
 
     constructor() public {
         owner = msg.sender;
         management = msg.sender;
         governance = msg.sender;
+
+        // Set initial keepers
+        // Gelato Ops [address(ops)] is the address allowed to run 'exec' on the Gelato side
+        keepers[address(ops)] = true;
+        keepers[owner] = true;
+        keepers[management] = true;
+        keepers[governance] = true;
     }
 
     /**
@@ -183,6 +183,8 @@ contract YearnHarvest {
         view
         returns (bool canExec, bytes memory execPayload)
     {
+        execPayload = bytes("No new strategies to automate");
+
         // Pull list of active strategies in production
         address[] memory strategies = aggregator.assetsStrategiesAddresses();
 
@@ -194,7 +196,7 @@ contract YearnHarvest {
             // Skip if there's an active job already created for the strategy
             if (jobIds[strategies[i]] == 0) {
                 canExec = true;
-                execPayload = execPayload = abi.encodeWithSelector(
+                execPayload = abi.encodeWithSelector(
                     this.createHarvestJob.selector,
                     strategies[i]
                 );
@@ -215,8 +217,20 @@ contract YearnHarvest {
         view
         returns (bool canExec, bytes memory execPayload)
     {
+        execPayload = bytes("Strategy not ready to harvest");
+
         // Declare a strategy object
         StrategyAPI strategy = StrategyAPI(strategyAddress);
+
+        // Make sure yHarvest remains the keeper of the strategy.
+        if (strategy.keeper() != address(this)) {
+            if (jobIds[strategyAddress] == 0) {
+                execPayload = bytes("Strategy was never onboarded to yHarvest");
+            } else {
+                execPayload = bytes("Strategy no longer automated by yHarvest");
+            }
+            return (canExec, execPayload);
+        }
 
         // `callCostInWei` is a required input to the `harvestTrigger()` method of the strategy
         // and represents the expected cost to call `harvest()`. Fantom does not currently
@@ -270,7 +284,6 @@ contract YearnHarvest {
         emit HarvestedByGelato(
             jobIds[strategyAddress],
             strategyAddress,
-            gelatoFeeToken,
             gelatoFee
         );
     }
@@ -302,6 +315,11 @@ contract YearnHarvest {
     */
     function setOwner(address _owner) external onlyAuthorized {
         require(_owner != address(0));
+
+        // Update keepers
+        delete keepers[owner];
+        keepers[_owner] = true;
+
         owner = _owner;
     }
 
@@ -311,6 +329,11 @@ contract YearnHarvest {
     */
     function setManagement(address _management) external onlyAuthorized {
         require(_management != address(0));
+
+        // Update keepers
+        delete keepers[management];
+        keepers[_management] = true;
+
         management = _management;
     }
 
@@ -345,8 +368,29 @@ contract YearnHarvest {
     */
     function acceptGovernance() external {
         require(msg.sender == pendingGovernance, "!authorized");
+
+        // Update keepers
+        delete keepers[governance];
+        keepers[pendingGovernance] = true;
+
         governance = pendingGovernance;
         delete pendingGovernance;
+    }
+
+    /**
+    @notice Adds address to the list of keepers able to run the jobs.
+    @param _keeper Address of the keeper to authorize
+    */
+    function authorizeKeeper(address _keeper) external onlyAuthorized {
+        keepers[_keeper] = true;
+    }
+
+    /**
+    @notice Removes address from list of authorized keepers.
+    @param _keeper Address of the keeper to remove
+    */
+    function removeKeeper(address _keeper) external onlyAuthorized {
+        delete keepers[_keeper];
     }
 
     /**

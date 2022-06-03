@@ -52,7 +52,7 @@ def yHarvest(
 
 @pytest.fixture(scope="function")
 def yHarvestDeployed():
-    yield Contract("0xA8D8C5AcB1D8CCe9b21EF79713B776DF2EFA77bB")
+    yield Contract("0x9AB353057CF41CfbA981a37e6C8F3942cc0147b6")
 
 
 @pytest.fixture(scope="function")
@@ -66,6 +66,13 @@ def strategy(yHarvest, owner):
     strategy = Contract("0xA9a904B5567b5AFfb6bB334bea2f90F700EB221a")
     # Make the yHarvest contract the strategy's keeper
     strategy.setKeeper(yHarvest.address, {"from": owner})
+    strategy.setForceHarvestTriggerOnce(True, {"from": owner})
+    yield strategy
+
+
+@pytest.fixture(scope="function")
+def strategy_not_onboarded(yHarvest, owner):
+    strategy = Contract("0x695A4a6e5888934828Cb97A3a7ADbfc71A70922D")
     yield strategy
 
 

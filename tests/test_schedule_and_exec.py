@@ -1,9 +1,10 @@
 from brownie import convert, reverts, chain, accounts
 
 
-def test_schedule_job_native(
+def test_launch_strategy_monitor(
     yHarvest,
     gelato,
+    native,
 ):
 
     tx = yHarvest.initiateStrategyMonitor()
@@ -21,14 +22,14 @@ def test_schedule_job_native(
         tx.events[0][0]["useTaskTreasuryFunds"] == False
     ), "We shouldn't be using Gelato's treasury"
 
-    assert yHarvest.feeToken() == tx.events[0][0]["feeToken"]
+    assert tx.events[0][0]["feeToken"] == native
 
     JobId = gelato.getTaskIdsByUser(yHarvest)
 
     assert JobId[0] == yHarvest.jobIds(yHarvest)
 
 
-def test_job_creations(
+def test_strategy_job_schedule(
     yHarvest,
     gelato,
     strategy,
@@ -38,6 +39,8 @@ def test_job_creations(
     gelatoFee,
     ftm_amount,
     crv,
+    strategy_not_onboarded,
+    native,
 ):
     tx = yHarvest.initiateStrategyMonitor()
 
@@ -56,7 +59,7 @@ def test_job_creations(
     with reverts():
         gelato.exec(
             gelatoFee,
-            yHarvest.feeToken(),
+            native,
             yHarvest.address,
             False,  # do not use Gelato Treasury for payment
             True,
@@ -69,7 +72,7 @@ def test_job_creations(
     with reverts():
         gelato.exec(
             gelatoFee,
-            yHarvest.feeToken(),
+            native,
             yHarvest.address,
             False,  # do not use Gelato Treasury for payment
             True,
@@ -82,7 +85,7 @@ def test_job_creations(
     with reverts():
         gelato.exec(
             gelatoFee,
-            yHarvest.feeToken(),
+            native,
             yHarvest.address,
             False,  # do not use Gelato Treasury for payment
             True,
@@ -95,7 +98,7 @@ def test_job_creations(
     with reverts():
         gelato.exec(
             gelatoFee,
-            yHarvest.feeToken(),
+            native,
             yHarvest.address,
             False,  # do not use Gelato Treasury for payment
             True,
@@ -109,7 +112,7 @@ def test_job_creations(
     with reverts():
         gelato.exec(
             100 * 10**18,
-            yHarvest.feeToken(),
+            native,
             yHarvest.address,
             False,  # do not use Gelato Treasury for payment
             True,
@@ -137,7 +140,7 @@ def test_job_creations(
     # create a new Gelato job for the strategy just onboarded to yHarvest
     tx = gelato.exec(
         gelatoFee,
-        yHarvest.feeToken(),
+        native,
         yHarvest.address,
         False,  # do not use Gelato Treasury for payment
         True,
@@ -160,7 +163,7 @@ def test_job_creations(
         strategy, {"from": accounts[0]}
     )
 
-    assert canExec, "Strategy not ready for harvest"
+    assert canExec, "Strategy not ready to harvest"
 
     stratAddress = convert.to_address("0x" + execData.hex()[-40:])
 
@@ -169,7 +172,7 @@ def test_job_creations(
 
     tx = gelato.exec(
         gelatoFee,
-        yHarvest.feeToken(),
+        native,
         yHarvest.address,
         False,  # do not use Gelato Treasury for payment
         True,
@@ -191,7 +194,7 @@ def test_job_creations(
     with reverts():
         gelato.exec(
             gelatoFee,
-            yHarvest.feeToken(),
+            native,
             yHarvest.address,
             False,  # do not use Gelato Treasury for payment
             True,
@@ -204,7 +207,15 @@ def test_job_creations(
     # If the the strategy's keeper is not yHarvest, then it stops
     # showing up in the resolver
     [canExec, execData] = yHarvest.checkHarvestStatus.call(
-        strategy, {"from": gelato.gelato()}
+        strategy, {"from": accounts[0]}
     )
 
+    assert convert.to_string(execData) == "Strategy no longer automated by yHarvest"
+    assert not canExec
+
+    [canExec, execData] = yHarvest.checkHarvestStatus.call(
+        strategy_not_onboarded, {"from": accounts[0]}
+    )
+
+    assert convert.to_string(execData) == "Strategy was never onboarded to yHarvest"
     assert not canExec
