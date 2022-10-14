@@ -2,7 +2,7 @@ dotenv: .env
 
 # default ganache network
 networks:
-    default: ftm-main-fork
+    default: arb-main-fork
 
 # automatically fetch contract sources from Ftmscan
 autofetch_sources: True

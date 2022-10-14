@@ -18,7 +18,7 @@ has happened.
 import {SafeMath} from "@openzeppelin/contracts/math/SafeMath.sol";
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {SafeERC20, IERC20} from "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
-import {StrategyAPI, VaultAPI, StrategyParams} from "@yearnvaults/contracts/BaseStrategy.sol";
+import {StrategyAPI} from "@yearnvaults/contracts/BaseStrategy.sol";
 import {IGelatoOps} from "../interfaces/IGelato.sol";
 
 /**
@@ -26,7 +26,7 @@ import {IGelatoOps} from "../interfaces/IGelato.sol";
 @notice We leverage the Yearn Lens set of contracts to obtain an up-to-date
 snapshot of active strategies in production.
  */
-interface IStrategyDataAggregator {
+interface IYearnLens {
     function assetsStrategiesAddresses()
         external
         view
@@ -37,9 +37,16 @@ contract YearnHarvest {
     using Address for address;
     using SafeMath for uint256;
 
-    // `jobIds` keeps track of the Gelato job IDs for each strategy and
-    // the yHarvest contract.
-    mapping(address => bytes32) public jobIds;
+    // `jobIds` keeps track of the Gelato job IDs for each strategy. A job
+    // ID is stored for each type of job currently supported - harvest and
+    // tend. Note that if a jobId exists, it does not necesarily mean that
+    // the job is active.
+    struct jobId {
+        bytes32 harvest;
+        bytes32 tend;
+    }
+
+    mapping(address => jobId) public jobIds;
 
     // `feeToken` is the crypto used for payment.
     address internal constant feeToken =
@@ -49,37 +56,32 @@ contract YearnHarvest {
     // denominated in `feeToken`. Note that setting it to 0 would
     // effectively prevent all executors from running any task.
     // To change its value, call `setMaxFee()`
-    uint256 public maxFee = 1e18;
+    uint256 public maxFee = 1e16;
 
-    // Yearn Lens data aggregator
-    IStrategyDataAggregator internal constant aggregator =
-        IStrategyDataAggregator(0x97D0bE2a72fc4Db90eD9Dbc2Ea7F03B4968f6938);
+    // Yearn Lens data lens
+    IYearnLens internal immutable lens;
 
     // Gelato Ops Proxy contract
-    IGelatoOps internal constant ops =
-        IGelatoOps(0x6EDe1597c05A0ca77031cBA43Ab887ccf24cd7e8);
+    IGelatoOps internal immutable ops;
 
     // Yearn accounts
-    address public management;
     address public owner;
     address payable public governance;
     address payable public pendingGovernance;
 
     // Yearn modifiers
-    mapping(address => bool) public keepers;
-
     modifier onlyKeepers() {
-        require(keepers[msg.sender], "!keeper");
+        require(
+            msg.sender == owner ||
+                msg.sender == governance ||
+                msg.sender == address(ops),
+            "!keeper"
+        );
         _;
     }
 
     modifier onlyAuthorized() {
-        require(
-            msg.sender == owner ||
-                msg.sender == management ||
-                msg.sender == governance,
-            "!authorized"
-        );
+        require(msg.sender == owner || msg.sender == governance, "!authorized");
         _;
     }
 
@@ -88,29 +90,34 @@ contract YearnHarvest {
         _;
     }
 
-    // `HarvestedByGelato` is an event we emit when there's a succesful harvest
-    event HarvestedByGelato(bytes32 jobId, address strategy, uint256 gelatoFee);
+    // `HarvestByGelato` is an event we emit when there's a succesful harvest
+    event HarvestByGelato(bytes32 jobId, address strategy, uint256 gelatoFee);
 
-    constructor() public {
+    // `TendByGelato` is an event we emit when there's a succesful tend
+    event TendByGelato(bytes32 jobId, address strategy, uint256 gelatoFee);
+
+    constructor(address _lens, address _gelatoOps) public {
+        // Set owner and governance
         owner = msg.sender;
-        management = msg.sender;
         governance = msg.sender;
 
-        // Set initial keepers
-        // Gelato Ops [address(ops)] is the address allowed to run 'exec' on the Gelato side
-        keepers[address(ops)] = true;
-        keepers[owner] = true;
-        keepers[management] = true;
-        keepers[governance] = true;
+        // Set Yearn Lens address
+        lens = IYearnLens(_lens);
+
+        // Set Gelato Ops Proxy
+        ops = IGelatoOps(_gelatoOps);
     }
 
     /**
     @notice Create Gelato job that will monitor for new strategies in Yearn Lens. When
     a new startegy is detected with its keeper set as yHarvest, yHarvest creates a
     gelato job for it. 
+    @dev note that the job id is stored under harvest even though the strategy monitoring job 
+    does not take care of harvests or tends, but was preferred to creating a 3rd job type in 
+    the `jobIds` struct.
     */
     function initiateStrategyMonitor() external onlyAuthorized {
-        jobIds[address(this)] = ops.createTaskNoPrepayment(
+        jobIds[address(this)].harvest = ops.createTaskNoPrepayment(
             address(this), // `execAddress`
             this.createHarvestJob.selector, // `execSelector`
             address(this), // `resolverAddress`
@@ -120,13 +127,13 @@ contract YearnHarvest {
     }
 
     /**
-    @notice Creates Gelato job for a strategy. Updates `jobIds`, which we use to log 
-    events and to manage the job.
+    @notice Creates Gelato harvest job for a strategy and pays Gelato for creating the job. 
+    Updates `jobIds`, which we use to log events and to manage the job.
     @param strategyAddress Strategy Address for which a harvest job will be created
     */
     function createHarvestJob(address strategyAddress) external onlyKeepers {
         // Create job and add it to the Gelato registry
-        createJob(strategyAddress);
+        createJob(strategyAddress, true);
 
         // `gelatoFee` and `gelatoFeeToken` are state variables in the gelato ops contract that
         // are temporarily modified by the executors right before executing the payload. They are
@@ -141,39 +148,75 @@ contract YearnHarvest {
     }
 
     /**
-    @notice Creates Gelato job for a strategy. The difference with the function above is that
-    this function can be used to manually create a job. The function above is used by Gelato
-    to create a harvest job when a new strategy is identified in an automated fashion. A manual
-    creation of a harvest job might be needed, for example, if we have to manually cancel a job
-    and re-start it afterwards. 
-    @param strategyAddress Strategy Address for which a job will be created
+    @notice Creates Gelato job for a strategy. This function can be used to manually create either 
+    a tend or harvest job. 
+    @param strategyAddress Strategy address for which a job will be created
+    @param isHarvest boolean indicating whether we create a harvest or a tend job.
     */
-    function createJob(address strategyAddress) public onlyKeepers {
-        jobIds[strategyAddress] = ops.createTaskNoPrepayment(
-            address(this), // `execAddress`
-            this.harvestStrategy.selector, // `execSelector`
-            address(this), // `resolverAddress`
-            abi.encodeWithSelector(
-                this.checkHarvestStatus.selector,
-                strategyAddress
-            ),
-            feeToken
-        );
+    function createJob(address strategyAddress, bool isHarvest)
+        public
+        onlyKeepers
+    {
+        bytes32 jobId;
+
+        if (isHarvest) {
+            jobId = ops.createTaskNoPrepayment(
+                address(this), // `execAddress`
+                this.harvestStrategy.selector, // `execSelector`
+                address(this), // `resolverAddress`
+                abi.encodeWithSelector(
+                    this.checkHarvestTrigger.selector,
+                    strategyAddress
+                ),
+                feeToken
+            );
+
+            // Store job id only once
+            if (jobIds[strategyAddress].harvest == 0) {
+                jobIds[strategyAddress].harvest = jobId;
+            }
+        } else {
+            jobId = ops.createTaskNoPrepayment(
+                address(this), // `execAddress`
+                this.tendStrategy.selector, // `execSelector`
+                address(this), // `resolverAddress`
+                abi.encodeWithSelector(
+                    this.checkTendTrigger.selector,
+                    strategyAddress
+                ),
+                feeToken
+            );
+
+            // Store job id only once
+            if (jobIds[strategyAddress].tend == 0) {
+                jobIds[strategyAddress].tend = jobId;
+            }
+        }
     }
 
     /**
-    @notice Cancel a Gelato job given a strategy address
-    @dev cancelJob(address(this)) cancels the strategy monitor job
+    @notice Cancel a Gelato job given a strategy address and job type
+    @dev cancelJob(address(this), true) cancels the strategy monitor job
     @param strategyAddress Strategy for which to cancel a job
+    @param isHarvest true cancels a harvest job, false cancels a tend job
     */
-    function cancelJob(address strategyAddress) external onlyAuthorized {
-        ops.cancelTask(jobIds[strategyAddress]); // dev: reverts if non-existent
-        delete jobIds[strategyAddress];
+    function cancelJob(address strategyAddress, bool isHarvest)
+        external
+        onlyAuthorized
+        returns (bytes32 cancelledJobId)
+    {
+        if (isHarvest) {
+            cancelledJobId = jobIds[strategyAddress].harvest;
+        } else {
+            cancelledJobId = jobIds[strategyAddress].tend;
+        }
+        ops.cancelTask(cancelledJobId); // dev: reverts if non-existent
     }
 
     /**
     @notice Used by keepers to determine whether a new strategy was added to Yearn Lens
-    that has the yHarvest contract as its keeper. 
+    that has the yHarvest contract as its keeper. A harvest job is automatically created 
+    for newly detected strategies. Tend jobs are not automatically created.
     @return canExec boolean indicating whether a new strategy requires automation.
     @return execPayload call data used by Gelato executors to call createHarvestJob(). It
     includes the address of the strategy to harvest as an input.
@@ -186,15 +229,16 @@ contract YearnHarvest {
         execPayload = bytes("No new strategies to automate");
 
         // Pull list of active strategies in production
-        address[] memory strategies = aggregator.assetsStrategiesAddresses();
+        address[] memory strategies = lens.assetsStrategiesAddresses();
 
         // Check if there are strategies with yHarvest assigned as keeper
         for (uint256 i = 0; i < strategies.length; i++) {
             if (StrategyAPI(strategies[i]).keeper() != address(this)) {
                 continue;
             }
-            // Skip if there's an active job already created for the strategy
-            if (jobIds[strategies[i]] == 0) {
+
+            // Skip if the job was created before, disregarding current status
+            if (jobIds[strategies[i]].harvest == 0) {
                 canExec = true;
                 execPayload = abi.encodeWithSelector(
                     this.createHarvestJob.selector,
@@ -212,7 +256,7 @@ contract YearnHarvest {
     @return execPayload call data used by Gelato executors to call harvestStrategy(). It
     includes the address of the strategy to harvest as an input parameter.
     */
-    function checkHarvestStatus(address strategyAddress)
+    function checkHarvestTrigger(address strategyAddress)
         external
         view
         returns (bool canExec, bytes memory execPayload)
@@ -224,20 +268,23 @@ contract YearnHarvest {
 
         // Make sure yHarvest remains the keeper of the strategy.
         if (strategy.keeper() != address(this)) {
-            if (jobIds[strategyAddress] == 0) {
-                execPayload = bytes("Strategy was never onboarded to yHarvest");
+            if (jobIds[strategyAddress].harvest == 0) {
+                execPayload = bytes(
+                    "Strategy was never onboarded to yHarvest for harvest operations"
+                );
             } else {
-                execPayload = bytes("Strategy no longer automated by yHarvest");
+                execPayload = bytes(
+                    "Strategy no longer automated by yHarvest for harvest operations"
+                );
             }
             return (canExec, execPayload);
         }
 
         // `callCostInWei` is a required input to the `harvestTrigger()` method of the strategy
-        // and represents the expected cost to call `harvest()`. Fantom does not currently
-        // offer the same global variables/functions that we have in mainnet -- block.basefee or
-        // gasUsed() -- to estimate the cost to harvest.
-        // For now, yHarvest uses a common, low, fixed cost accross strategies so that the trigger
-        // focuses on all other conditions
+        // and represents the expected cost to call `harvest()`. Some blockchains have global
+        // variables/functions such as block.basefee or gasUsed() that allow us to estimate the
+        // cost to harvest. Not all do, so for now we pass a common, low, fixed cost accross
+        // strategies so that the trigger focuses on all other conditions.
 
         // call the harvest trigger
         canExec = strategy.harvestTrigger(uint256(1e8));
@@ -251,8 +298,45 @@ contract YearnHarvest {
         }
     }
 
+    function checkTendTrigger(address strategyAddress)
+        public
+        view
+        returns (bool canExec, bytes memory execPayload)
+    {
+        execPayload = bytes("Strategy not ready to tend");
+
+        // Declare a strategy object
+        StrategyAPI strategy = StrategyAPI(strategyAddress);
+
+        // Make sure yHarvest remains the keeper of the strategy.
+        if (strategy.keeper() != address(this)) {
+            if (jobIds[strategyAddress].tend == 0) {
+                execPayload = bytes(
+                    "Strategy was never onboarded to yHarvest for tend operations"
+                );
+            } else {
+                execPayload = bytes(
+                    "Strategy no longer automated by yHarvest for tend operations"
+                );
+            }
+            return (canExec, execPayload);
+        }
+
+        // call the tend trigger. Refer to checkHarvestTrigger() for comments on the
+        // fixed cost passed to the function.
+        canExec = strategy.tendTrigger(uint256(1e8));
+
+        // If we can execute, prepare the payload
+        if (canExec) {
+            execPayload = abi.encodeWithSelector(
+                this.tendStrategy.selector,
+                strategyAddress
+            );
+        }
+    }
+
     /**
-    @notice Function that Gelato keepers call to harvest a strategy after `checkHarvestStatus()`
+    @notice Function that Gelato keepers call to harvest a strategy after `checkHarvestTrigger()`
     has confirmed that it's ready to harvest.
     It checks that the executors are getting paid in the expected crytocurrency and that
     they do not overcharge for the tx. The method also pays executors.
@@ -281,8 +365,45 @@ contract YearnHarvest {
         // Pay Gelato for the service.
         payKeeper(gelatoFee);
 
-        emit HarvestedByGelato(
-            jobIds[strategyAddress],
+        emit HarvestByGelato(
+            jobIds[strategyAddress].harvest,
+            strategyAddress,
+            gelatoFee
+        );
+    }
+
+    /**
+    @notice Function that Gelato keepers call to tend a strategy after `checkTendTrigger()`
+    has confirmed that it's ready to tend.
+    It checks that the executors are getting paid in the expected crytocurrency and that
+    they do not overcharge for the tx. The method also pays executors.
+    @dev an active job for a strategy linked to yHarvest must exist for executors to be
+    able to call this function. 
+    @param strategyAddress The address of the strategy to tend
+    */
+    function tendStrategy(address strategyAddress) external onlyKeepers {
+        // Declare a strategy object
+        StrategyAPI strategy = StrategyAPI(strategyAddress);
+
+        // `gelatoFee` and `gelatoFeeToken` are state variables in the gelato contract that
+        // are temporarily modified by the executors before executing the payload. They are
+        // reverted to default values when the gelato contract exec() method wraps up.
+        (uint256 gelatoFee, address gelatoFeeToken) = ops.getFeeDetails();
+
+        require(gelatoFeeToken == feeToken, "!token"); // dev: gelato not using intended token
+        require(gelatoFee <= maxFee, "!fee"); // dev: gelato executor overcharnging for the tx
+
+        // Re-run tendTrigger() with the gelatoFee passed by the executor to ensure
+        // the tx makes economic sense.
+        require(strategy.tendTrigger(gelatoFee), "!economic");
+
+        strategy.tend();
+
+        // Pay Gelato for the service.
+        payKeeper(gelatoFee);
+
+        emit TendByGelato(
+            jobIds[strategyAddress].tend,
             strategyAddress,
             gelatoFee
         );
@@ -315,26 +436,7 @@ contract YearnHarvest {
     */
     function setOwner(address _owner) external onlyAuthorized {
         require(_owner != address(0));
-
-        // Update keepers
-        delete keepers[owner];
-        keepers[_owner] = true;
-
         owner = _owner;
-    }
-
-    /**
-    @notice Changes the `management` address.
-    @param _management The new address to assign as `management`.
-    */
-    function setManagement(address _management) external onlyAuthorized {
-        require(_management != address(0));
-
-        // Update keepers
-        delete keepers[management];
-        keepers[_management] = true;
-
-        management = _management;
     }
 
     // 2-phase commit for a change in governance
@@ -368,29 +470,8 @@ contract YearnHarvest {
     */
     function acceptGovernance() external {
         require(msg.sender == pendingGovernance, "!authorized");
-
-        // Update keepers
-        delete keepers[governance];
-        keepers[pendingGovernance] = true;
-
         governance = pendingGovernance;
         delete pendingGovernance;
-    }
-
-    /**
-    @notice Adds address to the list of keepers able to run the jobs.
-    @param _keeper Address of the keeper to authorize
-    */
-    function authorizeKeeper(address _keeper) external onlyAuthorized {
-        keepers[_keeper] = true;
-    }
-
-    /**
-    @notice Removes address from list of authorized keepers.
-    @param _keeper Address of the keeper to remove
-    */
-    function removeKeeper(address _keeper) external onlyAuthorized {
-        delete keepers[_keeper];
     }
 
     /**
@@ -410,6 +491,6 @@ contract YearnHarvest {
         }
     }
 
-    // enables the contract to receive FTM
+    // enables the contract to receive native crypto
     receive() external payable {}
 }

@@ -4,7 +4,7 @@ from brownie import Contract, accounts
 def test_all_strategies(
     yHarvest,
     gelato,
-    aggregator,
+    lens,
     gov,
     baseFee,
     gelatoFee,
@@ -12,7 +12,7 @@ def test_all_strategies(
 ):
 
     # Get a list of active strategies in production
-    strategies = aggregator.assetsStrategiesAddresses()
+    strategies = lens.assetsStrategiesAddresses()
 
     # Create Gelato job
     tx = yHarvest.initiateStrategyMonitor()
@@ -54,10 +54,10 @@ def test_all_strategies(
         strat_i = Contract(strategies[i])
         assets_i = strat_i.estimatedTotalAssets()
         if assets_i > 0:
-            assert yHarvest.jobIds(strategies[i]) in jobIds, "Job not created"
+            assert yHarvest.jobIds(strategies[i])[0] in jobIds, "Job not created"
 
             # Check if there are harvest jobs to run
-            [canExec, execData] = yHarvest.checkHarvestStatus.call(
+            [canExec, execData] = yHarvest.checkHarvestTrigger.call(
                 strategies[i], {"from": gelato.gelato()}
             )
             assert strat_i.harvestTrigger(baseFee) == canExec, "no match"
@@ -73,14 +73,14 @@ def test_all_strategies(
                 False,  # do not revert if the tx fails so that the test does not fail
                 gelato.getResolverHash(
                     yHarvest.address,
-                    yHarvest.checkHarvestStatus.encode_input(strategies[i]),
+                    yHarvest.checkHarvestTrigger.encode_input(strategies[i]),
                 ),
                 yHarvest.address,
                 execData,
                 {"from": gelato.gelato()},
             )
 
-            if "HarvestedByGelato" in tx_i.events:
+            if "HarvestByGelato" in tx_i.events:
                 print(
                     f"\033[92mSuccess! {strat_i.name()} ({strategies[i]}) was harvested.\033[0m\n"
                 )
