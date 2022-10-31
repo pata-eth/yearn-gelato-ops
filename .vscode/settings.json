@@ -1,0 +1,21 @@
+{
+    "python.linting.enabled": true,
+    "python.linting.flake8Enabled": true,
+    "python.linting.flake8Args": [
+            "--max-line-length=80",
+            "--ignore=E203,W503",
+        ],
+    "python.formatting.provider": "black",
+    "python.formatting.blackArgs": [
+        "--line-length",
+        "79",
+    ],
+    "[python]": {
+        "editor.formatOnSave": true,
+        "editor.formatOnType": true,
+        "editor.formatOnPaste": true,
+        "rewrap.autoWrap.enabled": true
+    },
+    "python.languageServer": "Pylance",
+    "editor.formatOnSave": true
+}

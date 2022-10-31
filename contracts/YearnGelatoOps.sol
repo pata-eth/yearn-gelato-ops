@@ -1,25 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0
-pragma solidity 0.6.12;
-pragma experimental ABIEncoderV2;
+pragma solidity 0.8.15;
 
 /**
-@title Yearn Harvest
+@title Yearn Gelato Ops
 @author yearn.finance
-@notice Yearn Harvest or yHarvest is a smart contract that leverages Gelato to automate
-the harvest of strategies that have yHarvest assigned as its keeper.
-The contract provides the Gelato network of keepers Yearn harvest jobs that
+@notice Yearn Gelato Ops or yGO is a smart contract that leverages Gelato to automate
+the harvests and tends of strategies that have yGO assigned as its keeper.
+The contract provides the Gelato network of keepers Yearn harvest and tend jobs that
 are ready to execute, and it pays Gelato after a succesful harvest. The contract detects 
-when a new stragegy is using it as its keeper and creates a Gelato job automatically.
+when a new stragegy is using it as its keeper and creates a Gelato harvest job automatically. 
+Tend jobs must be added manually.
 @dev We use Lens to detect new strategies, but Lens does not include strategies that are
-not in a vault's withdrawal queue. This is not expected all the time, but it can happen and
-has happened.
+not in a vault's withdrawal queue. This is not expected all the time, but it can happen.
 */
 
-import {SafeMath} from "@openzeppelin/contracts/math/SafeMath.sol";
-import {Address} from "@openzeppelin/contracts/utils/Address.sol";
-import {SafeERC20, IERC20} from "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {StrategyAPI} from "@yearnvaults/contracts/BaseStrategy.sol";
 import {IGelatoOps} from "../interfaces/IGelato.sol";
+import {LibDataTypes} from "../interfaces/libraries/LibDataTypes.sol";
 
 /**
 @title Yearn Lens Interface
@@ -27,16 +25,14 @@ import {IGelatoOps} from "../interfaces/IGelato.sol";
 snapshot of active strategies in production.
  */
 interface IYearnLens {
+    // Lens Strategy Helper
     function assetsStrategiesAddresses()
         external
         view
         returns (address[] memory);
 }
 
-contract YearnHarvest {
-    using Address for address;
-    using SafeMath for uint256;
-
+contract YearnGelatoOps {
     // `jobIds` keeps track of the Gelato job IDs for each strategy. A job
     // ID is stored for each type of job currently supported - harvest and
     // tend. Note that if a jobId exists, it does not necesarily mean that
@@ -66,8 +62,8 @@ contract YearnHarvest {
 
     // Yearn accounts
     address public owner;
+    address public pendingGovernance;
     address payable public governance;
-    address payable public pendingGovernance;
 
     // Yearn modifiers
     modifier onlyKeepers() {
@@ -96,32 +92,44 @@ contract YearnHarvest {
     // `TendByGelato` is an event we emit when there's a succesful tend
     event TendByGelato(bytes32 jobId, address strategy, uint256 gelatoFee);
 
-    constructor(address _lens, address _gelatoOps) public {
+    constructor(address _lens, address _gelatoOps) {
         // Set owner and governance
         owner = msg.sender;
-        governance = msg.sender;
+        governance = payable(msg.sender);
 
         // Set Yearn Lens address
         lens = IYearnLens(_lens);
 
-        // Set Gelato Ops Proxy
+        // Set Gelato Ops
         ops = IGelatoOps(_gelatoOps);
     }
 
     /**
     @notice Create Gelato job that will monitor for new strategies in Yearn Lens. When
-    a new startegy is detected with its keeper set as yHarvest, yHarvest creates a
+    a new startegy is detected with its keeper set as yGO, yGO creates a
     gelato job for it. 
     @dev note that the job id is stored under harvest even though the strategy monitoring job 
     does not take care of harvests or tends, but was preferred to creating a 3rd job type in 
     the `jobIds` struct.
     */
     function initiateStrategyMonitor() external onlyAuthorized {
-        jobIds[address(this)].harvest = ops.createTaskNoPrepayment(
+        LibDataTypes.ModuleData memory moduleData = LibDataTypes.ModuleData(
+            new LibDataTypes.Module[](1),
+            new bytes[](1)
+        );
+        moduleData.modules[0] = LibDataTypes.Module.RESOLVER;
+        moduleData.args[0] = abi.encodeWithSelector(
+            this.checkNewStrategies.selector
+        );
+
+        bytes memory execSelector = abi.encodeWithSelector(
+            this.createHarvestJob.selector
+        );
+
+        jobIds[address(this)].harvest = ops.createTask(
             address(this), // `execAddress`
-            this.createHarvestJob.selector, // `execSelector`
-            address(this), // `resolverAddress`
-            abi.encodeWithSelector(this.checkNewStrategies.selector),
+            execSelector,
+            moduleData,
             feeToken
         );
     }
@@ -157,39 +165,58 @@ contract YearnHarvest {
         public
         onlyKeepers
     {
-        bytes32 jobId;
+        bytes32 _jobId;
+
+        LibDataTypes.ModuleData memory moduleData = LibDataTypes.ModuleData(
+            new LibDataTypes.Module[](1),
+            new bytes[](1)
+        );
 
         if (isHarvest) {
-            jobId = ops.createTaskNoPrepayment(
+            moduleData.modules[0] = LibDataTypes.Module.RESOLVER;
+            moduleData.args[0] = abi.encodeWithSelector(
+                this.checkHarvestTrigger.selector,
+                strategyAddress
+            );
+
+            bytes memory execSelector = abi.encodeWithSelector(
+                this.harvestStrategy.selector
+            );
+
+            _jobId = ops.createTask(
                 address(this), // `execAddress`
-                this.harvestStrategy.selector, // `execSelector`
-                address(this), // `resolverAddress`
-                abi.encodeWithSelector(
-                    this.checkHarvestTrigger.selector,
-                    strategyAddress
-                ),
+                execSelector,
+                moduleData,
                 feeToken
             );
 
-            // Store job id only once
+            // Store job id only once. A job that was created and then cancelled, will
+            // have the same job ID if created again
             if (jobIds[strategyAddress].harvest == 0) {
-                jobIds[strategyAddress].harvest = jobId;
+                jobIds[strategyAddress].harvest = _jobId;
             }
         } else {
-            jobId = ops.createTaskNoPrepayment(
+            moduleData.modules[0] = LibDataTypes.Module.RESOLVER;
+            moduleData.args[0] = abi.encodeWithSelector(
+                this.checkTendTrigger.selector,
+                strategyAddress
+            );
+
+            bytes memory execSelector = abi.encodeWithSelector(
+                this.tendStrategy.selector
+            );
+
+            _jobId = ops.createTask(
                 address(this), // `execAddress`
-                this.tendStrategy.selector, // `execSelector`
-                address(this), // `resolverAddress`
-                abi.encodeWithSelector(
-                    this.checkTendTrigger.selector,
-                    strategyAddress
-                ),
+                execSelector,
+                moduleData,
                 feeToken
             );
 
-            // Store job id only once
+            // Store job id only once. A job that was created and then cancelled, will
+            // have the same job ID if created again
             if (jobIds[strategyAddress].tend == 0) {
-                jobIds[strategyAddress].tend = jobId;
+                jobIds[strategyAddress].tend = _jobId;
             }
         }
     }
@@ -211,11 +238,16 @@ contract YearnHarvest {
             cancelledJobId = jobIds[strategyAddress].tend;
         }
         ops.cancelTask(cancelledJobId); // dev: reverts if non-existent
+
+        // Important: we don't reset jobIds[strategyAddress].harvest to zero because the
+        // strategy monitoring job would otherwise pick it up and restart it, and that's
+        // likely not what the user wants. A manual restart is required after a job
+        // cancellation.
     }
 
     /**
     @notice Used by keepers to determine whether a new strategy was added to Yearn Lens
-    that has the yHarvest contract as its keeper. A harvest job is automatically created 
+    that has the yGO contract as its keeper. A harvest job is automatically created 
     for newly detected strategies. Tend jobs are not automatically created.
     @return canExec boolean indicating whether a new strategy requires automation.
     @return execPayload call data used by Gelato executors to call createHarvestJob(). It
@@ -231,7 +263,7 @@ contract YearnHarvest {
         // Pull list of active strategies in production
         address[] memory strategies = lens.assetsStrategiesAddresses();
 
-        // Check if there are strategies with yHarvest assigned as keeper
+        // Check if there are strategies with yGO assigned as keeper
         for (uint256 i = 0; i < strategies.length; i++) {
             if (StrategyAPI(strategies[i]).keeper() != address(this)) {
                 continue;
@@ -266,15 +298,15 @@ contract YearnHarvest {
         // Declare a strategy object
         StrategyAPI strategy = StrategyAPI(strategyAddress);
 
-        // Make sure yHarvest remains the keeper of the strategy.
+        // Make sure yGO remains the keeper of the strategy.
         if (strategy.keeper() != address(this)) {
             if (jobIds[strategyAddress].harvest == 0) {
                 execPayload = bytes(
-                    "Strategy was never onboarded to yHarvest for harvest operations"
+                    "Strategy was never onboarded to yGO for harvest operations"
                 );
             } else {
                 execPayload = bytes(
-                    "Strategy no longer automated by yHarvest for harvest operations"
+                    "Strategy no longer automated by yGO for harvest operations"
                 );
             }
             return (canExec, execPayload);
@@ -308,15 +340,15 @@ contract YearnHarvest {
         // Declare a strategy object
         StrategyAPI strategy = StrategyAPI(strategyAddress);
 
-        // Make sure yHarvest remains the keeper of the strategy.
+        // Make sure yGO remains the keeper of the strategy.
         if (strategy.keeper() != address(this)) {
             if (jobIds[strategyAddress].tend == 0) {
                 execPayload = bytes(
-                    "Strategy was never onboarded to yHarvest for tend operations"
+                    "Strategy was never onboarded to yGO for tend operations"
                 );
             } else {
                 execPayload = bytes(
-                    "Strategy no longer automated by yHarvest for tend operations"
+                    "Strategy no longer automated by yGO for tend operations"
                 );
             }
             return (canExec, execPayload);
@@ -340,7 +372,7 @@ contract YearnHarvest {
     has confirmed that it's ready to harvest.
     It checks that the executors are getting paid in the expected crytocurrency and that
     they do not overcharge for the tx. The method also pays executors.
-    @dev an active job for a strategy linked to the yHarvest must exist for executors to be
+    @dev an active job for a strategy linked to the yGO must exist for executors to be
     able to call this function. 
     @param strategyAddress The address of the strategy to harvest
     */
@@ -377,7 +409,7 @@ contract YearnHarvest {
     has confirmed that it's ready to tend.
     It checks that the executors are getting paid in the expected crytocurrency and that
     they do not overcharge for the tx. The method also pays executors.
-    @dev an active job for a strategy linked to yHarvest must exist for executors to be
+    @dev an active job for a strategy linked to yGO must exist for executors to be
     able to call this function. 
     @param strategyAddress The address of the strategy to tend
     */
@@ -448,12 +480,9 @@ contract YearnHarvest {
     pending change, and the governance address is not updated until
     the proposed governance address has accepted the responsibility.
 
-    @param _governance The address requested to take over yHarvest governance.
+    @param _governance The address requested to take over yGO governance.
     */
-    function setGovernance(address payable _governance)
-        external
-        onlyGovernance
-    {
+    function setGovernance(address _governance) external onlyGovernance {
         pendingGovernance = _governance;
     }
 
@@ -470,7 +499,7 @@ contract YearnHarvest {
     */
     function acceptGovernance() external {
         require(msg.sender == pendingGovernance, "!authorized");
-        governance = pendingGovernance;
+        governance = payable(pendingGovernance);
         delete pendingGovernance;
     }
 
@@ -486,8 +515,9 @@ contract YearnHarvest {
             (bool success, ) = governance.call{value: amount}("");
             require(success, "!transfer");
         } else {
-            amount = IERC20(_token).balanceOf(address(this));
-            SafeERC20.safeTransfer(IERC20(_token), governance, amount);
+            IERC20 token = IERC20(_token);
+            amount = token.balanceOf(address(this));
+            token.transfer(governance, amount);
         }
     }
 

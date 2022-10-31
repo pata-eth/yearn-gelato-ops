@@ -1,4 +1,5 @@
 version: 1.0
-    arbitrum:
+    arbitrum: 
     fantom: 0x9AB353057CF41CfbA981a37e6C8F3942cc0147b6
+    optimism: 
     mainnet:

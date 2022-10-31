@@ -2,19 +2,19 @@ dotenv: .env
 
 # default ganache network
 networks:
-    default: arb-main-fork
+    default: opti-fork
 
 # automatically fetch contract sources from Ftmscan
 autofetch_sources: True
 
 dependencies:
-    - yearn/yearn-vaults@0.4.3-1
-    - OpenZeppelin/openzeppelin-contracts@3.1.0
+    - yearn/yearn-vaults@0.4.4
+    - OpenZeppelin/openzeppelin-contracts@4.7.3
 
 # path remapping to support imports from GitHub
 compiler:
     solc:
         version:
         remappings:
-            - "@yearnvaults=yearn/yearn-vaults@0.4.3-1"
-            - "@openzeppelin=OpenZeppelin/openzeppelin-contracts@3.1.0"
+            - "@yearnvaults=yearn/yearn-vaults@0.4.4"
+            - "@openzeppelin=OpenZeppelin/openzeppelin-contracts@4.7.3"

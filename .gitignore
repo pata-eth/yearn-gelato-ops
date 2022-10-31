@@ -4,6 +4,5 @@ __pycache__
 .hypothesis/
 build/
 reports/
-.vscode
 .DS_Store
 node_modules
