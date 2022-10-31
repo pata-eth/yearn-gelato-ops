@@ -4,7 +4,7 @@ live:
           - chainid: 10
             name: Mainnet
             id: opti-main
-            host: https://yearn:$YEARN_CODE_PWD@optimism1.node.yearn.tools
+            host: https://yearn:$YEARN_NODE_PWD@optimism1.node.yearn.tools
             explorer: https://api-optimistic.etherscan.io/api
 
 development:
