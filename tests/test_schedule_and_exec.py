@@ -22,6 +22,7 @@ def test_launch_strategy_monitor(
 def test_strategy_job_schedule(
     yGO,
     gelato,
+    new_strat_module_data,
     strategy,
     owner,
     gov,
@@ -49,7 +50,7 @@ def test_strategy_job_schedule(
             yGO.address,
             yGO.address,
             execData,
-            ([0], [yGO.checkNewStrategies.encode_input()]),
+            new_strat_module_data,
             gelatoFee,
             native,
             False,  # do not use Gelato Treasury for payment
@@ -62,7 +63,7 @@ def test_strategy_job_schedule(
             yGO.address,
             yGO.address,
             execData,
-            ([0], [yGO.checkNewStrategies.encode_input()]),
+            new_strat_module_data,
             gelatoFee,
             native,
             False,  # do not use Gelato Treasury for payment
@@ -75,7 +76,7 @@ def test_strategy_job_schedule(
             yGO.address,
             yGO.address,
             execData,
-            ([0], [yGO.checkNewStrategies.encode_input()]),
+            new_strat_module_data,
             gelatoFee,
             native,
             False,  # do not use Gelato Treasury for payment
@@ -89,7 +90,7 @@ def test_strategy_job_schedule(
             yGO.address,
             yGO.address,
             execData,
-            ([0], [yGO.checkNewStrategies.encode_input()]),
+            new_strat_module_data,
             10**17,
             native,
             False,  # do not use Gelato Treasury for payment
@@ -104,7 +105,7 @@ def test_strategy_job_schedule(
             yGO.address,
             yGO.address,
             execData,
-            ([0], [yGO.checkNewStrategies.encode_input()]),
+            new_strat_module_data,
             gelatoFee,
             usdc,
             False,  # do not use Gelato Treasury for payment
@@ -117,7 +118,7 @@ def test_strategy_job_schedule(
         yGO.address,
         yGO.address,
         execData,
-        ([0], [yGO.checkNewStrategies.encode_input()]),
+        new_strat_module_data,
         gelatoFee,
         native,
         False,  # do not use Gelato Treasury for payment
@@ -143,11 +144,19 @@ def test_strategy_job_schedule(
     assert strategy.address == stratAddress
     assert strategy.keeper() == yGO
 
+    func_encoded_w_selector = yGO.checkHarvestTrigger.encode_input(
+        stratAddress
+    )
+    selector = func_encoded_w_selector[2:10] + "0" * 56
+    input_args = func_encoded_w_selector[10:]
+    moduleData_args = "0x" + "0" * 24 + yGO.address[2:] + selector + input_args
+    moduleData = ([0], [moduleData_args])
+
     gelato.exec(
         yGO.address,
         yGO.address,
         execData,
-        ([0], [yGO.checkHarvestTrigger.encode_input(stratAddress)]),
+        moduleData,
         gelatoFee,
         native,
         False,  # do not use Gelato Treasury for payment
@@ -170,7 +179,7 @@ def test_strategy_job_schedule(
             yGO.address,
             yGO.address,
             execData,
-            ([0], [yGO.checkHarvestTrigger.encode_input(stratAddress)]),
+            moduleData,
             gelatoFee,
             native,
             False,  # do not use Gelato Treasury for payment
@@ -204,6 +213,7 @@ def test_strategy_job_schedule(
 def test_harvest_job_cancellation(
     yGO,
     gelato,
+    new_strat_module_data,
     strategy,
     owner,
     gelatoFee,
@@ -222,7 +232,7 @@ def test_harvest_job_cancellation(
         yGO.address,
         yGO.address,
         execData,
-        ([0], [yGO.checkNewStrategies.encode_input()]),
+        new_strat_module_data,
         gelatoFee,
         native,
         False,  # do not use Gelato Treasury for payment
@@ -234,11 +244,19 @@ def test_harvest_job_cancellation(
         strategy, {"from": accounts[0]}
     )
 
+    func_encoded_w_selector = yGO.checkHarvestTrigger.encode_input(
+        stratAddress
+    )
+    selector = func_encoded_w_selector[2:10] + "0" * 56
+    input_args = func_encoded_w_selector[10:]
+    moduleData_args = "0x" + "0" * 24 + yGO.address[2:] + selector + input_args
+    moduleData = ([0], [moduleData_args])
+
     gelato.exec(
         yGO.address,
         yGO.address,
         execData,
-        ([0], [yGO.checkHarvestTrigger.encode_input(stratAddress)]),
+        moduleData,
         gelatoFee,
         native,
         False,  # do not use Gelato Treasury for payment

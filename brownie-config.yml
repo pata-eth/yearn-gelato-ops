@@ -8,7 +8,7 @@ networks:
 autofetch_sources: True
 
 dependencies:
-    - yearn/yearn-vaults@0.4.4
+    - yearn/yearn-vaults@0.4.5
     - OpenZeppelin/openzeppelin-contracts@4.7.3
 
 # path remapping to support imports from GitHub
@@ -16,5 +16,5 @@ compiler:
     solc:
         version:
         remappings:
-            - "@yearnvaults=yearn/yearn-vaults@0.4.4"
+            - "@yearnvaults=yearn/yearn-vaults@0.4.5"
             - "@openzeppelin=OpenZeppelin/openzeppelin-contracts@4.7.3"

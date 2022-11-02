@@ -118,7 +118,8 @@ contract YearnGelatoOps {
             new bytes[](1)
         );
         moduleData.modules[0] = LibDataTypes.Module.RESOLVER;
-        moduleData.args[0] = abi.encodeWithSelector(
+        moduleData.args[0] = abi.encode(
+            address(this),
             this.checkNewStrategies.selector
         );
 
@@ -174,7 +175,8 @@ contract YearnGelatoOps {
 
         if (isHarvest) {
             moduleData.modules[0] = LibDataTypes.Module.RESOLVER;
-            moduleData.args[0] = abi.encodeWithSelector(
+            moduleData.args[0] = abi.encode(
+                address(this),
                 this.checkHarvestTrigger.selector,
                 strategyAddress
             );
@@ -197,7 +199,8 @@ contract YearnGelatoOps {
             }
         } else {
             moduleData.modules[0] = LibDataTypes.Module.RESOLVER;
-            moduleData.args[0] = abi.encodeWithSelector(
+            moduleData.args[0] = abi.encode(
+                address(this),
                 this.checkTendTrigger.selector,
                 strategyAddress
             );

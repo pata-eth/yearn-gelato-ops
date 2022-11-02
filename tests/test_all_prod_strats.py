@@ -9,6 +9,7 @@ def test_all_strategies(
     baseFee,
     gelatoFee,
     native,
+    new_strat_module_data,
 ):
 
     # Get a list of active strategies in production
@@ -38,7 +39,7 @@ def test_all_strategies(
             yGO.address,
             yGO.address,
             execData,
-            ([0], [yGO.checkNewStrategies.encode_input()]),  # 0: RESOLVER
+            new_strat_module_data,
             gelatoFee,
             native,
             False,  # do not use Gelato Treasury for payment
@@ -68,11 +69,21 @@ def test_all_strategies(
             if not canExec:
                 continue
 
+            func_encoded_w_selector = yGO.checkHarvestTrigger.encode_input(
+                strategies[i]
+            )
+            selector = func_encoded_w_selector[2:10] + "0" * 56
+            input_args = func_encoded_w_selector[10:]
+            moduleData_args = (
+                "0x" + "0" * 24 + yGO.address[2:] + selector + input_args
+            )
+            moduleData = ([0], [moduleData_args])
+
             tx_i = gelato.exec(
                 yGO.address,
                 yGO.address,
                 execData,
-                ([0], [yGO.checkHarvestTrigger.encode_input(strategies[i])]),
+                moduleData,
                 gelatoFee,
                 native,
                 False,  # do not use Gelato Treasury for payment

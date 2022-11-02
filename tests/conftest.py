@@ -1,5 +1,5 @@
 import pytest
-from brownie import YearnGelatoOps, Contract, Wei, interface
+from brownie import YearnGelatoOps, Contract, Wei, interface, convert
 
 
 # Snapshots the chain before each test and reverts after test completion.
@@ -61,6 +61,15 @@ def yGO(
 # @pytest.fixture(scope="function")
 # def yHarvestDeployed():
 #     yield Contract("0x9AB353057CF41CfbA981a37e6C8F3942cc0147b6")
+
+
+@pytest.fixture(scope="function")
+def new_strat_module_data(yGO):
+    resolver_address = convert.to_bytes(yGO.address).hex()
+    selector = yGO.checkNewStrategies.encode_input()[2:] + "0" * 56
+    moduleData_args = "0x" + resolver_address + selector
+    moduleData = ([0], [moduleData_args])
+    yield moduleData
 
 
 @pytest.fixture(scope="function")
