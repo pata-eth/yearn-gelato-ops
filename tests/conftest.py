@@ -1,11 +1,23 @@
+from enum import Enum
 import pytest
-from brownie import YearnGelatoOps, Contract, Wei, interface, convert
+from brownie import YearnGelatoOps, Contract, Wei, interface
+
+
+class jobTypes(int, Enum):
+    MONITOR = 0
+    HARVEST = 1
+    TEND = 2
 
 
 # Snapshots the chain before each test and reverts after test completion.
 @pytest.fixture(autouse=True)
 def isolation(fn_isolation):
     pass
+
+
+@pytest.fixture(scope="session")
+def job_types():
+    yield jobTypes
 
 
 @pytest.fixture(scope="module")
@@ -39,9 +51,6 @@ def yGO(
     usdc,
 ):
 
-    # gelato_proxy = "0x340759c8346A1E6Ed92035FB8B6ec57cE1D82c2c"
-    # yGO = YearnGelatoOps.deploy(lens.address, gelato_proxy, {"from": owner})
-
     yGO = YearnGelatoOps.deploy(lens.address, gelato.address, {"from": owner})
 
     # get some AETH donations to pay for jobs
@@ -59,28 +68,13 @@ def yGO(
 
 
 # @pytest.fixture(scope="function")
-# def yHarvestDeployed():
-#     yield Contract("0x9AB353057CF41CfbA981a37e6C8F3942cc0147b6")
-
-
-@pytest.fixture(scope="function")
-def new_strat_module_data(yGO):
-    resolver_address = convert.to_bytes(yGO.address).hex()
-    selector = yGO.checkNewStrategies.encode_input()[2:] + "0" * 56
-    moduleData_args = "0x" + resolver_address + selector
-    moduleData = ([0], [moduleData_args])
-    yield moduleData
+# def yGO():
+#     yield Contract("0xA9a904B5567b5AFfb6bB334bea2f90F700EB221a")
 
 
 @pytest.fixture(scope="function")
 def gelato():
-    # yield Contract("0x340759c8346A1E6Ed92035FB8B6ec57cE1D82c2c")
     yield interface.IGelatoOps("0x340759c8346A1E6Ed92035FB8B6ec57cE1D82c2c")
-    # yield interface.IGelatoOps("0xa5f9b728eceb9a1f6fcc89dcc2efd810ba4dec41")
-    # yield Contract.from_explorer(
-    #     address="0x340759c8346A1E6Ed92035FB8B6ec57cE1D82c2c",
-    #     as_proxy_for="0xa5f9b728eceb9a1f6fcc89dcc2efd810ba4dec41"
-    # )
 
 
 # Optimism WETH AaveV3GenLender

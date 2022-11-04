@@ -18,41 +18,37 @@ def test_strategy_is_active(strategy, lens, yGO):
 def test_initial_params(
     yGO,
     owner,
+    gelato,
 ):
-    assert int(yGO.jobIds(yGO.address)[0].hex()) == 0, "Job ID must be empty"
+    jobIds = gelato.getTaskIdsByUser(yGO)
+    assert len(jobIds) == 0, "Job ID must be empty"
 
     assert yGO.owner() == owner
     assert yGO.governance() == owner
+    assert yGO.keeper() == gelato
     assert yGO.pendingGovernance() == ZERO_ADDRESS
 
 
-def test_methods(
-    yGO,
-    native,
-    owner,
-    gov,
-    usdc,
-    gelato,
-):
+def test_methods(yGO, native, owner, gov, usdc, gelato, job_types):
 
     # Revert if we try to cancel a non-existent job
-    with reverts():
-        yGO.cancelJob(yGO, True, {"from": owner})
+    with reverts("Ops.cancelTask: Task not found"):
+        yGO.cancelJob(job_types.MONITOR, yGO.address, {"from": owner})
 
     with reverts("!authorized"):
-        yGO.cancelJob(yGO, True, {"from": accounts[0]})
+        yGO.cancelJob(job_types.MONITOR, yGO.address, {"from": accounts[0]})
 
     with reverts("!authorized"):
-        yGO.cancelJob(yGO, False, {"from": accounts[0]})
+        yGO.cancelJob(job_types.TEND, yGO.address, {"from": accounts[0]})
 
-    with reverts("!authorized"):
-        yGO.initiateStrategyMonitor({"from": accounts[0]})
-
-    with reverts("!authorized"):
-        yGO.initiateStrategyMonitor({"from": gelato})
+    with reverts("!keeper"):
+        yGO.createJob(job_types.MONITOR, yGO.address, {"from": accounts[0]})
 
     with reverts("!authorized"):
         yGO.acceptGovernance({"from": accounts[0]})
+
+    with reverts("!authorized"):
+        yGO.setKeeper(owner, {"from": accounts[0]})
 
     with reverts("!governance"):
         yGO.sweep(native, {"from": gov})
@@ -67,8 +63,11 @@ def test_methods(
     # variable in the contract
     yGO.sweep(usdc, {"from": owner})
 
-    yGO.initiateStrategyMonitor()
+    yGO.createJob(job_types.MONITOR, yGO.address)
 
     # Can't create the same job twice
     with reverts():
-        yGO.initiateStrategyMonitor()
+        yGO.createJob(job_types.MONITOR, yGO.address)
+
+    yGO.setKeeper(owner)
+    assert yGO.keeper() == owner.address

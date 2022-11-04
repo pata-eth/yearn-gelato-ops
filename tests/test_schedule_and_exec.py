@@ -1,28 +1,10 @@
 from brownie import convert, reverts, chain, accounts
 
 
-def test_launch_strategy_monitor(
-    yGO,
-    gelato,
-    native,
-):
-
-    tx = yGO.initiateStrategyMonitor()
-
-    # inspect events with job information
-    tx.info()
-
-    assert yGO.jobIds(yGO)[0] == gelato.getTaskIdsByUser(yGO)[0]
-
-    JobId = gelato.getTaskIdsByUser(yGO)
-
-    assert JobId[0] == yGO.jobIds(yGO)[0]
-
-
 def test_strategy_job_schedule(
     yGO,
     gelato,
-    new_strat_module_data,
+    job_types,
     strategy,
     owner,
     gov,
@@ -33,7 +15,8 @@ def test_strategy_job_schedule(
     native,
     sms,
 ):
-    yGO.initiateStrategyMonitor()
+    # Create strategy monitor job
+    yGO.createJob(job_types.MONITOR, yGO.address)
 
     assert strategy.keeper() == yGO
 
@@ -45,12 +28,14 @@ def test_strategy_job_schedule(
 
     assert strategy.address == stratAddress
 
+    module_data = yGO.getModuleData(job_types.MONITOR, yGO.address)
+
     with reverts("Gelatofied: Only gelato"):
         gelato.exec(
             yGO.address,
             yGO.address,
             execData,
-            new_strat_module_data,
+            module_data,
             gelatoFee,
             native,
             False,  # do not use Gelato Treasury for payment
@@ -63,7 +48,7 @@ def test_strategy_job_schedule(
             yGO.address,
             yGO.address,
             execData,
-            new_strat_module_data,
+            module_data,
             gelatoFee,
             native,
             False,  # do not use Gelato Treasury for payment
@@ -76,7 +61,7 @@ def test_strategy_job_schedule(
             yGO.address,
             yGO.address,
             execData,
-            new_strat_module_data,
+            module_data,
             gelatoFee,
             native,
             False,  # do not use Gelato Treasury for payment
@@ -90,7 +75,7 @@ def test_strategy_job_schedule(
             yGO.address,
             yGO.address,
             execData,
-            new_strat_module_data,
+            module_data,
             10**17,
             native,
             False,  # do not use Gelato Treasury for payment
@@ -105,7 +90,7 @@ def test_strategy_job_schedule(
             yGO.address,
             yGO.address,
             execData,
-            new_strat_module_data,
+            module_data,
             gelatoFee,
             usdc,
             False,  # do not use Gelato Treasury for payment
@@ -118,7 +103,7 @@ def test_strategy_job_schedule(
         yGO.address,
         yGO.address,
         execData,
-        new_strat_module_data,
+        module_data,
         gelatoFee,
         native,
         False,  # do not use Gelato Treasury for payment
@@ -128,10 +113,6 @@ def test_strategy_job_schedule(
 
     # Verify that we paid Gelato
     assert yGO.balance() + gelatoFee == amount
-
-    jobIds = gelato.getTaskIdsByUser(yGO)
-
-    assert yGO.jobIds(strategy)[0] in jobIds, "Job not created"
 
     [canExec, execData] = yGO.checkHarvestTrigger.call(
         strategy, {"from": accounts[0]}
@@ -144,19 +125,11 @@ def test_strategy_job_schedule(
     assert strategy.address == stratAddress
     assert strategy.keeper() == yGO
 
-    func_encoded_w_selector = yGO.checkHarvestTrigger.encode_input(
-        stratAddress
-    )
-    selector = func_encoded_w_selector[2:10] + "0" * 56
-    input_args = func_encoded_w_selector[10:]
-    moduleData_args = "0x" + "0" * 24 + yGO.address[2:] + selector + input_args
-    moduleData = ([0], [moduleData_args])
-
     gelato.exec(
         yGO.address,
         yGO.address,
         execData,
-        moduleData,
+        yGO.getModuleData(job_types.HARVEST, stratAddress),
         gelatoFee,
         native,
         False,  # do not use Gelato Treasury for payment
@@ -179,7 +152,7 @@ def test_strategy_job_schedule(
             yGO.address,
             yGO.address,
             execData,
-            moduleData,
+            yGO.getModuleData(job_types.HARVEST, stratAddress),
             gelatoFee,
             native,
             False,  # do not use Gelato Treasury for payment
@@ -195,7 +168,7 @@ def test_strategy_job_schedule(
 
     assert (
         convert.to_string(execData)
-        == "Strategy no longer automated by yGO for harvest operations"
+        == "Strategy not onboarded to yGO for harvest operations"
     )
     assert not canExec
 
@@ -205,7 +178,7 @@ def test_strategy_job_schedule(
 
     assert (
         convert.to_string(execData)
-        == "Strategy was never onboarded to yGO for harvest operations"
+        == "Strategy not onboarded to yGO for harvest operations"
     )
     assert not canExec
 
@@ -213,13 +186,14 @@ def test_strategy_job_schedule(
 def test_harvest_job_cancellation(
     yGO,
     gelato,
-    new_strat_module_data,
     strategy,
     owner,
     gelatoFee,
     native,
+    job_types,
 ):
-    yGO.initiateStrategyMonitor()
+    # Create strategy monitor job
+    yGO.createJob(job_types.MONITOR, yGO.address)
 
     [_, execData] = yGO.checkNewStrategies.call({"from": accounts[0]})
 
@@ -232,7 +206,7 @@ def test_harvest_job_cancellation(
         yGO.address,
         yGO.address,
         execData,
-        new_strat_module_data,
+        yGO.getModuleData(job_types.MONITOR, yGO.address),
         gelatoFee,
         native,
         False,  # do not use Gelato Treasury for payment
@@ -244,19 +218,11 @@ def test_harvest_job_cancellation(
         strategy, {"from": accounts[0]}
     )
 
-    func_encoded_w_selector = yGO.checkHarvestTrigger.encode_input(
-        stratAddress
-    )
-    selector = func_encoded_w_selector[2:10] + "0" * 56
-    input_args = func_encoded_w_selector[10:]
-    moduleData_args = "0x" + "0" * 24 + yGO.address[2:] + selector + input_args
-    moduleData = ([0], [moduleData_args])
-
     gelato.exec(
         yGO.address,
         yGO.address,
         execData,
-        moduleData,
+        yGO.getModuleData(job_types.HARVEST, strategy.address),
         gelatoFee,
         native,
         False,  # do not use Gelato Treasury for payment
@@ -264,7 +230,12 @@ def test_harvest_job_cancellation(
         {"from": gelato.gelato()},
     )
 
-    yGO.cancelJob(strategy, True, {"from": owner})
+    with reverts("!removed"):
+        yGO.cancelJob(job_types.HARVEST, strategy, {"from": owner})
+
+    strategy.setKeeper(owner)
+
+    yGO.cancelJob(job_types.HARVEST, strategy, {"from": owner})
 
     [canExec, execData] = yGO.checkNewStrategies.call({"from": accounts[0]})
 

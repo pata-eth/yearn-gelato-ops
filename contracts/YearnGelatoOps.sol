@@ -33,16 +33,12 @@ interface IYearnLens {
 }
 
 contract YearnGelatoOps {
-    // `jobIds` keeps track of the Gelato job IDs for each strategy. A job
-    // ID is stored for each type of job currently supported - harvest and
-    // tend. Note that if a jobId exists, it does not necesarily mean that
-    // the job is active.
-    struct jobId {
-        bytes32 harvest;
-        bytes32 tend;
+    // An enum to list all supported jobs in the contract
+    enum jobTypes {
+        MONITOR,
+        HARVEST,
+        TEND
     }
-
-    mapping(address => jobId) public jobIds;
 
     // `feeToken` is the crypto used for payment.
     address internal constant feeToken =
@@ -62,6 +58,7 @@ contract YearnGelatoOps {
 
     // Yearn accounts
     address public owner;
+    address public keeper;
     address public pendingGovernance;
     address payable public governance;
 
@@ -70,7 +67,7 @@ contract YearnGelatoOps {
         require(
             msg.sender == owner ||
                 msg.sender == governance ||
-                msg.sender == address(ops),
+                msg.sender == keeper,
             "!keeper"
         );
         _;
@@ -86,63 +83,39 @@ contract YearnGelatoOps {
         _;
     }
 
+    // `JobCreated` is an event we emit when there's a succesful harvest
+    event JobCreated(
+        address indexed strategy,
+        jobTypes indexed jobType,
+        bytes32 jobId
+    );
+
     // `HarvestByGelato` is an event we emit when there's a succesful harvest
-    event HarvestByGelato(bytes32 jobId, address strategy, uint256 gelatoFee);
+    event HarvestByGelato(address indexed strategy, uint256 gelatoFee);
 
     // `TendByGelato` is an event we emit when there's a succesful tend
-    event TendByGelato(bytes32 jobId, address strategy, uint256 gelatoFee);
+    event TendByGelato(address indexed strategy, uint256 gelatoFee);
 
-    constructor(address _lens, address _gelatoOps) {
+    constructor(address lensAddress, address gelatoAddress) {
         // Set owner and governance
         owner = msg.sender;
+        keeper = gelatoAddress;
         governance = payable(msg.sender);
 
         // Set Yearn Lens address
-        lens = IYearnLens(_lens);
+        lens = IYearnLens(lensAddress);
 
         // Set Gelato Ops
-        ops = IGelatoOps(_gelatoOps);
-    }
-
-    /**
-    @notice Create Gelato job that will monitor for new strategies in Yearn Lens. When
-    a new startegy is detected with its keeper set as yGO, yGO creates a
-    gelato job for it. 
-    @dev note that the job id is stored under harvest even though the strategy monitoring job 
-    does not take care of harvests or tends, but was preferred to creating a 3rd job type in 
-    the `jobIds` struct.
-    */
-    function initiateStrategyMonitor() external onlyAuthorized {
-        LibDataTypes.ModuleData memory moduleData = LibDataTypes.ModuleData(
-            new LibDataTypes.Module[](1),
-            new bytes[](1)
-        );
-        moduleData.modules[0] = LibDataTypes.Module.RESOLVER;
-        moduleData.args[0] = abi.encode(
-            address(this),
-            this.checkNewStrategies.selector
-        );
-
-        bytes memory execSelector = abi.encodeWithSelector(
-            this.createHarvestJob.selector
-        );
-
-        jobIds[address(this)].harvest = ops.createTask(
-            address(this), // `execAddress`
-            execSelector,
-            moduleData,
-            feeToken
-        );
+        ops = IGelatoOps(gelatoAddress);
     }
 
     /**
     @notice Creates Gelato harvest job for a strategy and pays Gelato for creating the job. 
-    Updates `jobIds`, which we use to log events and to manage the job.
     @param strategyAddress Strategy Address for which a harvest job will be created
     */
     function createHarvestJob(address strategyAddress) external onlyKeepers {
         // Create job and add it to the Gelato registry
-        createJob(strategyAddress, true);
+        createJob(jobTypes.HARVEST, strategyAddress);
 
         // `gelatoFee` and `gelatoFeeToken` are state variables in the gelato ops contract that
         // are temporarily modified by the executors right before executing the payload. They are
@@ -159,93 +132,48 @@ contract YearnGelatoOps {
     /**
     @notice Creates Gelato job for a strategy. This function can be used to manually create either 
     a tend or harvest job. 
+    @param jobType Enum determining job type
     @param strategyAddress Strategy address for which a job will be created
-    @param isHarvest boolean indicating whether we create a harvest or a tend job.
     */
-    function createJob(address strategyAddress, bool isHarvest)
+    function createJob(jobTypes jobType, address strategyAddress)
         public
         onlyKeepers
     {
-        bytes32 _jobId;
-
-        LibDataTypes.ModuleData memory moduleData = LibDataTypes.ModuleData(
-            new LibDataTypes.Module[](1),
-            new bytes[](1)
+        LibDataTypes.ModuleData memory moduleData = getModuleData(
+            jobType,
+            strategyAddress
         );
 
-        if (isHarvest) {
-            moduleData.modules[0] = LibDataTypes.Module.RESOLVER;
-            moduleData.args[0] = abi.encode(
-                address(this),
-                this.checkHarvestTrigger.selector,
-                strategyAddress
-            );
+        bytes memory execData = getJobData(jobType, strategyAddress);
 
-            bytes memory execSelector = abi.encodeWithSelector(
-                this.harvestStrategy.selector
-            );
+        bytes32 jobId = ops.createTask(
+            address(this),
+            execData,
+            moduleData,
+            feeToken
+        );
 
-            _jobId = ops.createTask(
-                address(this), // `execAddress`
-                execSelector,
-                moduleData,
-                feeToken
-            );
-
-            // Store job id only once. A job that was created and then cancelled, will
-            // have the same job ID if created again
-            if (jobIds[strategyAddress].harvest == 0) {
-                jobIds[strategyAddress].harvest = _jobId;
-            }
-        } else {
-            moduleData.modules[0] = LibDataTypes.Module.RESOLVER;
-            moduleData.args[0] = abi.encode(
-                address(this),
-                this.checkTendTrigger.selector,
-                strategyAddress
-            );
-
-            bytes memory execSelector = abi.encodeWithSelector(
-                this.tendStrategy.selector
-            );
-
-            _jobId = ops.createTask(
-                address(this), // `execAddress`
-                execSelector,
-                moduleData,
-                feeToken
-            );
-
-            // Store job id only once. A job that was created and then cancelled, will
-            // have the same job ID if created again
-            if (jobIds[strategyAddress].tend == 0) {
-                jobIds[strategyAddress].tend = _jobId;
-            }
-        }
+        emit JobCreated(strategyAddress, jobType, jobId);
     }
 
     /**
     @notice Cancel a Gelato job given a strategy address and job type
-    @dev cancelJob(address(this), true) cancels the strategy monitor job
-    @param strategyAddress Strategy for which to cancel a job
-    @param isHarvest true cancels a harvest job, false cancels a tend job
+    @dev Important: you must remove yGO as the keeper before cancelling the task; 
+    otherwise, the strategy monitor will pick up the job again and restart it.
+    @param jobType Enum determining job type
+    @param strategyAddress Strategy for which to cancel a job    
     */
-    function cancelJob(address strategyAddress, bool isHarvest)
+    function cancelJob(jobTypes jobType, address strategyAddress)
         external
         onlyAuthorized
         returns (bytes32 cancelledJobId)
     {
-        if (isHarvest) {
-            cancelledJobId = jobIds[strategyAddress].harvest;
-        } else {
-            cancelledJobId = jobIds[strategyAddress].tend;
-        }
+        require(
+            StrategyAPI(strategyAddress).keeper() != address(this),
+            "!removed"
+        );
+        bytes32 cancelledJobId = getJobId(jobType, strategyAddress);
         ops.cancelTask(cancelledJobId); // dev: reverts if non-existent
-
-        // Important: we don't reset jobIds[strategyAddress].harvest to zero because the
-        // strategy monitoring job would otherwise pick it up and restart it, and that's
-        // likely not what the user wants. A manual restart is required after a job
-        // cancellation.
     }
 
     /**
@@ -273,12 +201,10 @@ contract YearnGelatoOps {
             }
 
             // Skip if the job was created before, disregarding current status
-            if (jobIds[strategies[i]].harvest == 0) {
+            bytes32 jobId = getJobId(jobTypes.HARVEST, strategies[i]);
+            if (jobId == 0) {
                 canExec = true;
-                execPayload = abi.encodeWithSelector(
-                    this.createHarvestJob.selector,
-                    strategies[i]
-                );
+                execPayload = getJobData(jobTypes.MONITOR, strategies[i]);
                 break;
             }
         }
@@ -301,17 +227,11 @@ contract YearnGelatoOps {
         // Declare a strategy object
         StrategyAPI strategy = StrategyAPI(strategyAddress);
 
-        // Make sure yGO remains the keeper of the strategy.
+        // Make sure yGO is the keeper of the strategy.
         if (strategy.keeper() != address(this)) {
-            if (jobIds[strategyAddress].harvest == 0) {
-                execPayload = bytes(
-                    "Strategy was never onboarded to yGO for harvest operations"
-                );
-            } else {
-                execPayload = bytes(
-                    "Strategy no longer automated by yGO for harvest operations"
-                );
-            }
+            execPayload = bytes(
+                "Strategy not onboarded to yGO for harvest operations"
+            );
             return (canExec, execPayload);
         }
 
@@ -326,10 +246,7 @@ contract YearnGelatoOps {
 
         // If we can execute, prepare the payload
         if (canExec) {
-            execPayload = abi.encodeWithSelector(
-                this.harvestStrategy.selector,
-                strategyAddress
-            );
+            execPayload = getJobData(jobTypes.HARVEST, strategyAddress);
         }
     }
 
@@ -343,19 +260,14 @@ contract YearnGelatoOps {
         // Declare a strategy object
         StrategyAPI strategy = StrategyAPI(strategyAddress);
 
-        // Make sure yGO remains the keeper of the strategy.
+        // Make sure yGO is the keeper of the strategy.
         if (strategy.keeper() != address(this)) {
-            if (jobIds[strategyAddress].tend == 0) {
-                execPayload = bytes(
-                    "Strategy was never onboarded to yGO for tend operations"
-                );
-            } else {
-                execPayload = bytes(
-                    "Strategy no longer automated by yGO for tend operations"
-                );
-            }
+            execPayload = bytes(
+                "Strategy not onboarded to yGO for tend operations"
+            );
             return (canExec, execPayload);
         }
+        return (canExec, execPayload);
 
         // call the tend trigger. Refer to checkHarvestTrigger() for comments on the
         // fixed cost passed to the function.
@@ -363,10 +275,7 @@ contract YearnGelatoOps {
 
         // If we can execute, prepare the payload
         if (canExec) {
-            execPayload = abi.encodeWithSelector(
-                this.tendStrategy.selector,
-                strategyAddress
-            );
+            execPayload = getJobData(jobTypes.TEND, strategyAddress);
         }
     }
 
@@ -400,11 +309,7 @@ contract YearnGelatoOps {
         // Pay Gelato for the service.
         payKeeper(gelatoFee);
 
-        emit HarvestByGelato(
-            jobIds[strategyAddress].harvest,
-            strategyAddress,
-            gelatoFee
-        );
+        emit HarvestByGelato(strategyAddress, gelatoFee);
     }
 
     /**
@@ -437,11 +342,122 @@ contract YearnGelatoOps {
         // Pay Gelato for the service.
         payKeeper(gelatoFee);
 
-        emit TendByGelato(
-            jobIds[strategyAddress].tend,
-            strategyAddress,
-            gelatoFee
+        emit TendByGelato(strategyAddress, gelatoFee);
+    }
+
+    /**
+    @notice Build call data used by the keeper to execute the job once it's workable
+    @param jobType Enum determining job type
+    @param strategyAddress Strategy address for which the call data will be created
+    */
+    function getJobData(jobTypes jobType, address strategyAddress)
+        public
+        view
+        returns (bytes memory jobSelector)
+    {
+        if (jobType == jobTypes.HARVEST) {
+            jobSelector = abi.encodeCall(
+                this.harvestStrategy,
+                (strategyAddress)
+            );
+        } else if (jobType == jobTypes.TEND) {
+            jobSelector = abi.encodeCall(this.tendStrategy, (strategyAddress));
+        } else if (jobType == jobTypes.MONITOR) {
+            jobSelector = abi.encodeCall(
+                this.createHarvestJob,
+                (strategyAddress)
+            );
+        }
+    }
+
+    /**
+    @notice Get gelato module used to check for the workable status of a job. 
+    @param jobType Enum determining job type
+    @param strategyAddress Strategy address to check job status for
+    @dev Note that `strategyAddress` is not needed when `jobTypes` is jobTypes.MONITOR
+    */
+    function getModuleData(jobTypes jobType, address strategyAddress)
+        public
+        view
+        returns (LibDataTypes.ModuleData memory moduleData)
+    {
+        moduleData = LibDataTypes.ModuleData(
+            new LibDataTypes.Module[](1),
+            new bytes[](1)
         );
+
+        // All job types use the same module type
+        moduleData.modules[0] = LibDataTypes.Module.RESOLVER;
+
+        if (jobType == jobTypes.MONITOR) {
+            moduleData.args[0] = abi.encode(
+                address(this),
+                abi.encodeCall(this.checkNewStrategies, ())
+            );
+        } else if (jobType == jobTypes.HARVEST) {
+            moduleData.args[0] = abi.encode(
+                address(this),
+                abi.encodeCall(this.checkHarvestTrigger, (strategyAddress))
+            );
+        } else if (jobType == jobTypes.TEND) {
+            moduleData.args[0] = abi.encode(
+                address(this),
+                abi.encodeCall(this.checkTendTrigger, (strategyAddress))
+            );
+        }
+    }
+
+    /**
+    @notice Get function selector from `jobData`. Used to id the job in the Gelato contract.
+    @param jobData Call data used by the keeper to execute the job once it's workable
+    */
+    function extractSelector(bytes memory jobData)
+        internal
+        pure
+        returns (bytes4 selector)
+    {
+        selector =
+            jobData[0] |
+            (bytes4(jobData[1]) >> 8) |
+            (bytes4(jobData[2]) >> 16) |
+            (bytes4(jobData[3]) >> 24);
+    }
+
+    /**
+    @notice Query the Gelato job id contract storage and return a job id if the task exists.
+    @param jobType Enum determining job type
+    @param strategyAddress Strategy address for the job to query
+    */
+    function getJobId(jobTypes jobType, address strategyAddress)
+        public
+        view
+        returns (bytes32 jobId)
+    {
+        LibDataTypes.ModuleData memory moduleData = getModuleData(
+            jobType,
+            strategyAddress
+        );
+
+        bytes memory jobData = getJobData(jobType, strategyAddress);
+
+        bytes4 selector = extractSelector(jobData);
+
+        jobId = ops.getTaskId(
+            address(this),
+            address(this),
+            selector,
+            moduleData,
+            feeToken
+        );
+
+        bytes32[] memory jobIds = ops.getTaskIdsByUser(address(this));
+
+        for (uint256 i = 0; i < jobIds.length; i++) {
+            if (jobId == jobIds[i]) {
+                return jobId;
+            }
+        }
+        delete jobId;
     }
 
     /**
@@ -472,6 +488,15 @@ contract YearnGelatoOps {
     function setOwner(address _owner) external onlyAuthorized {
         require(_owner != address(0));
         owner = _owner;
+    }
+
+    /**
+    @notice Changes the `keeper` address.
+    @param _keeper The new address to assign as `keeper`.
+    */
+    function setKeeper(address _keeper) external onlyAuthorized {
+        require(_keeper != address(0));
+        keeper = _keeper;
     }
 
     // 2-phase commit for a change in governance

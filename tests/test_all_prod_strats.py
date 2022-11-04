@@ -2,24 +2,29 @@ from brownie import Contract, accounts
 
 
 def test_all_strategies(
-    yGO,
-    gelato,
-    lens,
-    gov,
-    baseFee,
-    gelatoFee,
-    native,
-    new_strat_module_data,
+    yGO, gelato, lens, gov, baseFee, gelatoFee, native, job_types
 ):
 
     # Get a list of active strategies in production
     strategies = lens.assetsStrategiesAddresses()
 
-    # Create Gelato job
-    yGO.initiateStrategyMonitor()
+    # Create Strategy Monitor job
+    tx = yGO.createJob(job_types.MONITOR, yGO.address)
 
     # Check that the job IDs match
-    assert yGO.jobIds(yGO)[0] == gelato.getTaskIdsByUser(yGO)[0]
+    jobId = yGO.getJobId(job_types.MONITOR, yGO.address)
+    assert jobId == tx.events["JobCreated"]["jobId"]
+    assert jobId in gelato.getTaskIdsByUser(yGO)
+
+    jobId_gelato = gelato.getTaskId(
+        yGO.address,
+        yGO.address,
+        yGO.signatures["createHarvestJob"],
+        yGO.getModuleData(job_types.MONITOR, yGO.address),
+        native,
+    )
+
+    assert jobId == jobId_gelato
 
     # Assign the Yearn Gelato Ops as the keeper, check the resolver,
     # and execute when strat is harvestable
@@ -34,12 +39,14 @@ def test_all_strategies(
     # Simulate Gelato executors and create a job for each strategy
     [canExec, execData] = yGO.checkNewStrategies.call({"from": accounts[0]})
 
+    module_data = yGO.getModuleData(job_types.MONITOR, yGO.address)
+
     while canExec:
         gelato.exec(
             yGO.address,
             yGO.address,
             execData,
-            new_strat_module_data,
+            module_data,
             gelatoFee,
             native,
             False,  # do not use Gelato Treasury for payment
@@ -58,7 +65,9 @@ def test_all_strategies(
         strat_i = Contract(strategies[i])
         assets_i = strat_i.estimatedTotalAssets()
         if assets_i > 0:
-            assert yGO.jobIds(strategies[i])[0] in jobIds, "Job not created"
+            assert (
+                yGO.getJobId(job_types.HARVEST, strategies[i]) in jobIds
+            ), "Job not created"
 
             # Check if there are harvest jobs to run
             [canExec, execData] = yGO.checkHarvestTrigger.call(
@@ -69,21 +78,11 @@ def test_all_strategies(
             if not canExec:
                 continue
 
-            func_encoded_w_selector = yGO.checkHarvestTrigger.encode_input(
-                strategies[i]
-            )
-            selector = func_encoded_w_selector[2:10] + "0" * 56
-            input_args = func_encoded_w_selector[10:]
-            moduleData_args = (
-                "0x" + "0" * 24 + yGO.address[2:] + selector + input_args
-            )
-            moduleData = ([0], [moduleData_args])
-
             tx_i = gelato.exec(
                 yGO.address,
                 yGO.address,
                 execData,
-                moduleData,
+                yGO.getModuleData(job_types.HARVEST, strategies[i]),
                 gelatoFee,
                 native,
                 False,  # do not use Gelato Treasury for payment
