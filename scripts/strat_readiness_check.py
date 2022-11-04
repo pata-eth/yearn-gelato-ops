@@ -26,6 +26,10 @@ def main():
     for i in strats:
         strat_i = Contract(i, owner=opti_sms)
         want_i = Contract(strat_i.want())
+
+        if strat_i.estimatedTotalAssets() // 10 ** want_i.decimals() == 0:
+            continue
+
         vault = Contract(strat_i.vault())
         lastReport = vault.strategies(strat_i)[5]
 
@@ -50,6 +54,6 @@ def main():
             print("; harvesting...\n")
             strat_i.harvest()
         # fast-forward 12 hours
-        chain.sleep(12 * 3_600)
+        # chain.sleep(12 * 3_600)
         should_harvest = strat_i.harvestTrigger(harvet_cost)
         print(f"       harvest trigger is now {should_harvest}\n")

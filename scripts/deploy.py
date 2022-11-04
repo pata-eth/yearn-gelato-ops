@@ -1,6 +1,13 @@
 from brownie import YearnGelatoOps, accounts, network, Wei, interface, convert
+from enum import Enum
 import click
 import json
+
+
+class jobTypes(int, Enum):
+    MONITOR = 0
+    HARVEST = 1
+    TEND = 2
 
 
 def main():
@@ -31,8 +38,8 @@ def main():
 
     assert yGO.balance() == amount
 
-    # Create Gelato job
-    tx = yGO.initiateStrategyMonitor()
+    # Create Strategy Monitoring job
+    tx = yGO.createJob(jobTypes.MONITOR, yGO.address)
 
     tx.info()
 
