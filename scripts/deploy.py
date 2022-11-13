@@ -1,47 +1,50 @@
-from brownie import YearnHarvest, accounts, network, Contract, Wei, interface
+from brownie import YearnGelatoOps, accounts, network, Wei, interface, convert
+from enum import Enum
 import click
+import json
+
+
+class jobTypes(int, Enum):
+    MONITOR = 0
+    HARVEST = 1
+    TEND = 2
 
 
 def main():
     print(f"You are using the '{network.show_active()}' network")
-    owner = accounts.load(click.prompt("Account", type=click.Choice(accounts.load())))
-    print(f"You are using: 'owner' [{owner.address}]")
-
-    lens = interface.IYearnLens(
-        "0x66a1A27f4b22DcAa24e427DCFFbf0cdDd9D35e0f"
+    dev = accounts.load(
+        click.prompt("Account", type=click.Choice(accounts.load()))
     )
+    print(f"You are using: 'dev' [{dev.address}]")
 
-    gelato = interface.IGelatoOps("0xB3f5503f93d5Ef84b06993a1975B9D21B962892F")
+    lens = interface.IYearnLens("0xD3A93C794ee2798D8f7906493Cd3c2A835aa0074")
 
-    publish_source = click.confirm("Verify source on etherscan?")
+    gelato = interface.IGelatoOps("0x340759c8346A1E6Ed92035FB8B6ec57cE1D82c2c")
 
-    yHarvest = YearnHarvest.deploy(lens, gelato, {"from": owner}, publish_source=publish_source)
+    yGO = YearnGelatoOps.deploy(lens, gelato, {"from": dev})
 
-    # Tricrypto
-    # strategy = Contract("0xcDD989d84f9B63D2f0B1906A2d9B22355316dE31")
-    # strategy.setCreditThreshold(Wei("100 ether"), {"from": owner})
-    # strategy.setKeeper(yHarvest.address, {"from": owner})
+    # Create verification file we can manually upload to optiscan
+    with open("./contracts/YearnGelatoOps.json", "w") as outfile:
+        json.dump(
+            YearnGelatoOps.get_verification_info()["standard_json_input"],
+            outfile,
+            ensure_ascii=False,
+            indent=4,
+        )
 
-    # Run every 48 hours at a minimum
-    # strategy.setMaxReportDelay(60 * 60 * 48, {"from": owner})
+    # Fund the yGO contract
+    amount = Wei("0.3 ether")
+    dev.transfer(yGO, amount)
 
-    # # TwoPool
-    # strategy = Contract("0xF992FCEF771dF908f9B09Bb2619092f70AB21957")
-    # strategy.setCreditThreshold(Wei("100 ether"), {"from": owner}) # ~100 USD threshold
-    # strategy.setKeeper(yHarvest.address, {"from": owner})
-    # strategy.setMaxReportDelay(60 * 60 * 48, {"from": owner})
+    assert yGO.balance() == amount
 
-    # # Curve Spell MIM
-    # strategy = Contract("0xF992FCEF771dF908f9B09Bb2619092f70AB21957")
-    # strategy.setKeeper(yHarvest.address, {"from": owner})
-    # strategy.setMaxReportDelay(60 * 60 * 48, {"from": owner})
-
-    # Fund the yHarvest contract
-    owner.transfer(yHarvest, "0.2 ether")
-
-    assert yHarvest.balance() == Wei("0.2 ether")
-
-    # Create Gelato job
-    tx = yHarvest.initiateStrategyMonitor()
+    # Create Strategy Monitoring job
+    tx = yGO.createJob(jobTypes.MONITOR, yGO.address)
 
     tx.info()
+
+    # Ensure that the strategy monitor does not detect any strategy
+    canExec, execData = yGO.checkNewStrategies()
+
+    assert not canExec
+    assert convert.to_string(execData) == "No new strategies to automate"

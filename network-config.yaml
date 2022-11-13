@@ -1,0 +1,21 @@
+live:
+    - name: Optimism
+      networks:
+          - chainid: 10
+            name: Mainnet
+            id: opti-main
+            host: https://yearn:$YEARN_NODE_PWD@optimism1.node.yearn.tools
+            explorer: https://api-optimistic.etherscan.io/api
+
+development:
+    - name: Ganache-CLI (Optimism Fork)
+      id: opti-fork
+      cmd: ganache-cli
+      host: http://127.0.0.1
+      timeout: 120
+      cmd_settings:
+          port: 8545
+          gas_limit: 12000000
+          accounts: 10
+          mnemonic: brownie
+          fork: opti-main

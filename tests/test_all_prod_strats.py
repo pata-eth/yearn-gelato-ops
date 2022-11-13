@@ -2,62 +2,75 @@ from brownie import Contract, accounts
 
 
 def test_all_strategies(
-    yHarvest,
-    gelato,
-    lens,
-    gov,
-    baseFee,
-    gelatoFee,
-    native,
+    yGO, gelato, lens, gov, baseFee, gelatoFee, native, job_types
 ):
 
     # Get a list of active strategies in production
     strategies = lens.assetsStrategiesAddresses()
 
-    # Create Gelato job
-    tx = yHarvest.initiateStrategyMonitor()
+    # Create Strategy Monitor job
+    tx = yGO.createJob(job_types.MONITOR, yGO.address)
 
-    resolverHash = tx.events[0][0]["resolverHash"]
+    # Check that the job IDs match
+    jobId = yGO.getJobId(job_types.MONITOR, yGO.address)
+    assert jobId == tx.events["JobCreated"]["jobId"]
+    assert jobId in gelato.getTaskIdsByUser(yGO)
 
-    # Assign the Yearn Harvest as the keeper, check the resolver,
+    jobId_gelato = gelato.getTaskId(
+        yGO.address,
+        yGO.address,
+        yGO.signatures["createHarvestJob"],
+        yGO.getModuleData(job_types.MONITOR, yGO.address),
+        native,
+    )
+
+    assert jobId == jobId_gelato
+
+    # Assign the Yearn Gelato Ops as the keeper, check the resolver,
     # and execute when strat is harvestable
     for i in range(0, len(strategies)):
         strat_i = Contract(strategies[i])
         assets_i = strat_i.estimatedTotalAssets()
-        # print(f"Strategy {strategies[i]} has {strat_i.estimatedTotalAssets()/10**18:_} in assets.\n")
+
         if assets_i > 0:
-            strat_i.setKeeper(yHarvest, {"from": gov})
-            assert strat_i.keeper() == yHarvest
+            strat_i.setKeeper(yGO, {"from": gov})
+            assert strat_i.keeper() == yGO
 
     # Simulate Gelato executors and create a job for each strategy
-    [canExec, execData] = yHarvest.checkNewStrategies.call({"from": accounts[0]})
+    [canExec, execData] = yGO.checkNewStrategies.call({"from": accounts[0]})
+
+    module_data = yGO.getModuleData(job_types.MONITOR, yGO.address)
 
     while canExec:
         gelato.exec(
+            yGO.address,
+            yGO.address,
+            execData,
+            module_data,
             gelatoFee,
             native,
-            yHarvest.address,
             False,  # do not use Gelato Treasury for payment
             True,
-            resolverHash,
-            yHarvest.address,
-            execData,
             {"from": gelato.gelato()},
         )
 
-        [canExec, execData] = yHarvest.checkNewStrategies.call({"from": accounts[0]})
+        [canExec, execData] = yGO.checkNewStrategies.call(
+            {"from": accounts[0]}
+        )
 
-    jobIds = gelato.getTaskIdsByUser(yHarvest)
+    jobIds = gelato.getTaskIdsByUser(yGO)
 
     # Check harvest conditions and attempt to harvest when needed
     for i in range(0, len(strategies)):
         strat_i = Contract(strategies[i])
         assets_i = strat_i.estimatedTotalAssets()
         if assets_i > 0:
-            assert yHarvest.jobIds(strategies[i])[0] in jobIds, "Job not created"
+            assert (
+                yGO.getJobId(job_types.HARVEST, strategies[i]) in jobIds
+            ), "Job not created"
 
             # Check if there are harvest jobs to run
-            [canExec, execData] = yHarvest.checkHarvestTrigger.call(
+            [canExec, execData] = yGO.checkHarvestTrigger.call(
                 strategies[i], {"from": gelato.gelato()}
             )
             assert strat_i.harvestTrigger(baseFee) == canExec, "no match"
@@ -66,25 +79,24 @@ def test_all_strategies(
                 continue
 
             tx_i = gelato.exec(
+                yGO.address,
+                yGO.address,
+                execData,
+                yGO.getModuleData(job_types.HARVEST, strategies[i]),
                 gelatoFee,
                 native,
-                yHarvest.address,
                 False,  # do not use Gelato Treasury for payment
-                False,  # do not revert if the tx fails so that the test does not fail
-                gelato.getResolverHash(
-                    yHarvest.address,
-                    yHarvest.checkHarvestTrigger.encode_input(strategies[i]),
-                ),
-                yHarvest.address,
-                execData,
+                False,  # do not revert if the tx fails
                 {"from": gelato.gelato()},
             )
 
             if "HarvestByGelato" in tx_i.events:
                 print(
-                    f"\033[92mSuccess! {strat_i.name()} ({strategies[i]}) was harvested.\033[0m\n"
+                    f"\033[92mSuccess! {strat_i.name()} ({strategies[i]}) "
+                    "was harvested.\033[0m\n"
                 )
             else:
                 print(
-                    f"\033[91mFailed! {strat_i.name()} ({strategies[i]}) reverts.\033[0m\n"
+                    f"\033[91mFailed! {strat_i.name()} ({strategies[i]}) "
+                    "reverts.\033[0m\n"
                 )

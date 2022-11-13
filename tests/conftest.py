@@ -1,5 +1,13 @@
+from enum import Enum
 import pytest
-from brownie import YearnHarvest, Contract, Wei, interface
+from brownie import YearnGelatoOps, Contract, Wei, interface
+
+
+class jobTypes(int, Enum):
+    MONITOR = 0
+    HARVEST = 1
+    TEND = 2
+
 
 # Snapshots the chain before each test and reverts after test completion.
 @pytest.fixture(autouse=True)
@@ -7,11 +15,14 @@ def isolation(fn_isolation):
     pass
 
 
+@pytest.fixture(scope="session")
+def job_types():
+    yield jobTypes
+
+
 @pytest.fixture(scope="module")
 def lens():
-    yield interface.IYearnLens(
-        "0x66a1A27f4b22DcAa24e427DCFFbf0cdDd9D35e0f"
-    )
+    yield interface.IYearnLens("0xD3A93C794ee2798D8f7906493Cd3c2A835aa0074")
 
 
 # `baseFee` is provided to harvestTrigger() in the checker function
@@ -29,48 +40,60 @@ def gelatoFee():
 
 
 @pytest.fixture(scope="function")
-def yHarvest(
+def yGO(
     lens,
     gelato,
     owner,
     whale,
     amount,
+    usdc_amount,
+    usdc_whale,
+    usdc,
 ):
 
-    yHarvest = YearnHarvest.deploy(lens.address, gelato.address, {"from": owner})
+    yGO = YearnGelatoOps.deploy(lens.address, gelato.address, {"from": owner})
 
     # get some AETH donations to pay for jobs
-    whale.transfer(yHarvest, amount)
+    whale.transfer(yGO, amount)
 
     # gas price is set to zero in the fork
-    assert yHarvest.balance() == amount
+    assert yGO.balance() == amount
 
-    yield yHarvest
+    # get USDC to test sweep function
+    usdc.transfer(yGO, usdc_amount, {"from": usdc_whale})
+
+    assert usdc.balanceOf(yGO) == usdc_amount
+
+    yield yGO
 
 
 # @pytest.fixture(scope="function")
-# def yHarvestDeployed():
-#     yield Contract("0x9AB353057CF41CfbA981a37e6C8F3942cc0147b6")
+# def yGO():
+#     yield Contract("0xA9a904B5567b5AFfb6bB334bea2f90F700EB221a")
 
 
 @pytest.fixture(scope="function")
 def gelato():
-    yield interface.IGelatoOps("0xB3f5503f93d5Ef84b06993a1975B9D21B962892F")
+    yield interface.IGelatoOps("0x340759c8346A1E6Ed92035FB8B6ec57cE1D82c2c")
 
 
-# Arbitrum Curve Tricrypto
+# Optimism WETH AaveV3GenLender
 @pytest.fixture(scope="function")
-def strategy(yHarvest, owner):
-    strategy = Contract("0xcDD989d84f9B63D2f0B1906A2d9B22355316dE31")
-    # Make the yHarvest contract the strategy's keeper
-    strategy.setKeeper(yHarvest.address, {"from": owner})
-    strategy.setForceHarvestTriggerOnce(True, {"from": owner})
+def strategy(yGO, sms):
+    strategy = Contract(
+        "0xf1a2DAB4C02563137ff1Ba34a8C9f92C2F8eeE49", owner=sms
+    )
+    # Make the yGO contract the strategy's keeper
+    strategy.setKeeper(yGO.address)
     yield strategy
 
 
+# Optimism USDC AaveV3GenLender
 @pytest.fixture(scope="function")
-def strategy_not_onboarded(yHarvest, owner):
-    strategy = Contract("0xf1C3047C6310806de1d25535BC50748815066a7b")
+def strategy_not_onboarded(sms):
+    strategy = Contract(
+        "0x20D27AC263A8B0f15D20614b0D63a4381997407c", owner=sms
+    )
     yield strategy
 
 
@@ -80,8 +103,13 @@ def amount():
 
 
 @pytest.fixture(scope="module")
-def crv():
-    yield interface.ERC20("0x11cDb42B0EB46D95f990BeDD4695A6e3fA034978")
+def usdc_amount(usdc):
+    yield 10_000 * 10 ** usdc.decimals()
+
+
+@pytest.fixture(scope="module")
+def usdc():
+    yield interface.ERC20("0x7f5c764cbc14f9669b88837ca1490cca17c31607")
 
 
 @pytest.fixture(scope="module")
@@ -92,7 +120,12 @@ def native():
 # Define any accounts in this section
 @pytest.fixture(scope="module")
 def gov(accounts):
-    yield accounts.at("0xb6bc033D34733329971B938fEf32faD7e98E56aD", force=True)
+    yield accounts.at("0xF5d9D6133b698cE29567a90Ab35CfB874204B3A7", force=True)
+
+
+@pytest.fixture(scope="module")
+def sms(accounts):
+    yield accounts.at("0xea3a15df68fCdBE44Fdb0DB675B2b3A14a148b26", force=True)
 
 
 @pytest.fixture(scope="module")
@@ -102,4 +135,9 @@ def owner(accounts):
 
 @pytest.fixture(scope="module")
 def whale(accounts):
-    yield accounts.at("0xd664DCcF95062eE26c6BFAa1f6bC1b5e68CC2243", force=True)
+    yield accounts.at("0xacD03D601e5bB1B275Bb94076fF46ED9D753435A", force=True)
+
+
+@pytest.fixture(scope="module")
+def usdc_whale(accounts):
+    yield accounts.at("0xD6216fC19DB775Df9774a6E33526131dA7D19a2c", force=True)
