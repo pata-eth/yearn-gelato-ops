@@ -2,7 +2,7 @@ dotenv: .env
 
 # default ganache network
 networks:
-    default: opti-fork
+    default: polygon-fork
 
 # automatically fetch contract sources from Ftmscan
 autofetch_sources: True

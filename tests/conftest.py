@@ -74,29 +74,29 @@ def yGO(
 
 @pytest.fixture(scope="function")
 def gelato():
-    yield interface.IGelatoOps("0x340759c8346A1E6Ed92035FB8B6ec57cE1D82c2c")
+    yield interface.IGelatoOps("0x527a819db1eb0e34426297b03bae11F2f8B3A19E")
 
 @pytest.fixture(scope="module")
 def common_report_trigger():
     yield interface.ICommonReportTrigger("0x4D25b3aed34eC1222846F6C87e2ac4A73f4ab6b6")
 
 
-# Optimism WETH AaveV3GenLender
+# Polygon yearn-v3 WETH AaveV3Lender
 @pytest.fixture(scope="function")
 def strategy(yGO, sms):
     strategy = Contract(
-        "0xf1a2DAB4C02563137ff1Ba34a8C9f92C2F8eeE49", owner=sms
+        "0x5f76526390d9cd9944d65C605C5006480FA1bFcB", owner=sms
     )
     # Make the yGO contract the strategy's keeper
     strategy.setKeeper(yGO.address)
     yield strategy
 
 
-# Optimism USDC AaveV3GenLender
+# Polygon yearn-v3 USDC CompoundV3Lender
 @pytest.fixture(scope="function")
 def strategy_not_onboarded(sms):
     strategy = Contract(
-        "0x20D27AC263A8B0f15D20614b0D63a4381997407c", owner=sms
+        "0xF32C48793CAe27880D18Ee4697fAB6D08748228E", owner=sms
     )
     yield strategy
 
@@ -113,7 +113,7 @@ def usdc_amount(usdc):
 
 @pytest.fixture(scope="module")
 def usdc():
-    yield interface.ERC20("0x7f5c764cbc14f9669b88837ca1490cca17c31607")
+    yield interface.ERC20("0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174")
 
 
 @pytest.fixture(scope="module")
@@ -124,24 +124,24 @@ def native():
 # Define any accounts in this section
 @pytest.fixture(scope="module")
 def gov(accounts):
-    yield accounts.at("0xF5d9D6133b698cE29567a90Ab35CfB874204B3A7", force=True)
+    yield accounts.at("0xC4ad0000E223E398DC329235e6C497Db5470B626", force=True) #yearn governance on polygon
 
 
 @pytest.fixture(scope="module")
 def sms(accounts):
-    yield accounts.at("0xea3a15df68fCdBE44Fdb0DB675B2b3A14a148b26", force=True)
+    yield accounts.at("0x16388000546eDed4D476bd2A4A374B5a16125Bc1", force=True)
 
 
 @pytest.fixture(scope="module")
 def owner(accounts):
-    yield accounts.at("0x2757AE02F65dB7Ce8CF2b2261c58f07a0170e58e", force=True)
+    yield accounts.at("0x33333333D5eFb92f19a5F94a43456b3cec2797AE", force=True)
 
 
 @pytest.fixture(scope="module")
 def whale(accounts):
-    yield accounts.at("0xacD03D601e5bB1B275Bb94076fF46ED9D753435A", force=True)
+    yield accounts.at("0xe7804c37c13166fF0b37F5aE0BB07A3aEbb6e245", force=True)
 
 
 @pytest.fixture(scope="module")
 def usdc_whale(accounts):
-    yield accounts.at("0xD6216fC19DB775Df9774a6E33526131dA7D19a2c", force=True)
+    yield accounts.at("0xf977814e90da44bfa03b6295a0616a897441acec", force=True)

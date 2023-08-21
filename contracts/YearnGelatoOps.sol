@@ -15,7 +15,6 @@ not in a vault's withdrawal queue. This is not expected all the time, but it can
 */
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-//import {StrategyAPI} from "@yearnvaults/contracts/BaseStrategy.sol";
 import {StrategyAPI} from "../interfaces/IStrategy.sol";
 import {IGelatoOps} from "../interfaces/IGelato.sol";
 import {LibDataTypes} from "../interfaces/libraries/LibDataTypes.sol";
