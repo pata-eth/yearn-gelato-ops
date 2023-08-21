@@ -15,9 +15,11 @@ not in a vault's withdrawal queue. This is not expected all the time, but it can
 */
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {StrategyAPI} from "@yearnvaults/contracts/BaseStrategy.sol";
+//import {StrategyAPI} from "@yearnvaults/contracts/BaseStrategy.sol";
+import {StrategyAPI} from "../interfaces/IStrategy.sol";
 import {IGelatoOps} from "../interfaces/IGelato.sol";
 import {LibDataTypes} from "../interfaces/libraries/LibDataTypes.sol";
+import {ICommonReportTrigger} from "../interfaces/ICommonReportTrigger.sol";
 
 /**
 @title Yearn Lens Interface
@@ -55,6 +57,9 @@ contract YearnGelatoOps {
 
     // Gelato Ops Proxy contract
     IGelatoOps internal immutable ops;
+
+    // commonReportTrigger is the the central contract that keepers should use to decide if Yearn V3 strategies should report profits as well as when a V3 Vaults should record a strategies profits.
+    ICommonReportTrigger public commonReportTrigger;
 
     // Yearn accounts
     address public owner;
@@ -96,7 +101,7 @@ contract YearnGelatoOps {
     // `TendByGelato` is an event we emit when there's a succesful tend
     event TendByGelato(address indexed strategy, uint256 gelatoFee);
 
-    constructor(address lensAddress, address gelatoAddress) {
+    constructor(address lensAddress, address gelatoAddress, address commonReportTriggerAddress) {
         // Set owner and governance
         owner = msg.sender;
         keeper = gelatoAddress;
@@ -107,6 +112,9 @@ contract YearnGelatoOps {
 
         // Set Gelato Ops
         ops = IGelatoOps(gelatoAddress);
+
+        // Set CommonReportTrigger
+        commonReportTrigger = ICommonReportTrigger(commonReportTriggerAddress);
     }
 
     /**
@@ -235,14 +243,8 @@ contract YearnGelatoOps {
             return (canExec, execPayload);
         }
 
-        // `callCostInWei` is a required input to the `harvestTrigger()` method of the strategy
-        // and represents the expected cost to call `harvest()`. Some blockchains have global
-        // variables/functions such as block.basefee or gasUsed() that allow us to estimate the
-        // cost to harvest. Not all do, so for now we pass a common, low, fixed cost accross
-        // strategies so that the trigger focuses on all other conditions.
-
-        // call the harvest trigger
-        canExec = strategy.harvestTrigger(uint256(1e8));
+        // yearn-v3: we pass the strategy address to the CommonReportTrigger to check for reportTrigger
+        (canExec, ) = commonReportTrigger.strategyReportTrigger(strategyAddress);
 
         // If we can execute, prepare the payload
         if (canExec) {
@@ -269,9 +271,8 @@ contract YearnGelatoOps {
         }
         return (canExec, execPayload);
 
-        // call the tend trigger. Refer to checkHarvestTrigger() for comments on the
-        // fixed cost passed to the function.
-        canExec = strategy.tendTrigger(uint256(1e8));
+        // yearn-v3: we pass the strategy address to the CommonReportTrigger to check for tendTrigger
+        (canExec, ) = commonReportTrigger.strategyTendTrigger(strategyAddress);
 
         // If we can execute, prepare the payload
         if (canExec) {
@@ -300,11 +301,12 @@ contract YearnGelatoOps {
         require(gelatoFeeToken == feeToken, "!token"); // dev: gelato not using intended token
         require(gelatoFee <= maxFee, "!fee"); // dev: gelato executor overcharnging for the tx
 
-        // Re-run harvestTrigger() with the gelatoFee passed by the executor to ensure
-        // the tx makes economic sense.
-        require(strategy.harvestTrigger(gelatoFee), "!economic");
+        // Re-run strategyReportTrigger() to ensure the tx makes economic sense.
+        // yearn-v3: we pass the strategy address to the CommonReportTrigger to check for reportTrigger
+        (bool shouldReport, ) = commonReportTrigger.strategyReportTrigger(strategyAddress);
+        require(shouldReport, "!economic");
 
-        strategy.harvest();
+        strategy.report();
 
         // Pay Gelato for the service.
         payKeeper(gelatoFee);
@@ -333,9 +335,10 @@ contract YearnGelatoOps {
         require(gelatoFeeToken == feeToken, "!token"); // dev: gelato not using intended token
         require(gelatoFee <= maxFee, "!fee"); // dev: gelato executor overcharnging for the tx
 
-        // Re-run tendTrigger() with the gelatoFee passed by the executor to ensure
-        // the tx makes economic sense.
-        require(strategy.tendTrigger(gelatoFee), "!economic");
+        // Re-run strategyTendTrigger() to ensure the tx makes economic sense.
+        // yearn-v3: we pass the strategy address to the CommonReportTrigger to check for tendTrigger
+        (bool shouldTend, ) = commonReportTrigger.strategyTendTrigger(strategyAddress);
+        require(shouldTend, "!economic");
 
         strategy.tend();
 
@@ -479,6 +482,15 @@ contract YearnGelatoOps {
     */
     function setMaxFee(uint256 _maxFee) external onlyAuthorized {
         maxFee = _maxFee;
+    }
+
+    /**
+    @notice Changes the `commonReportTrigger` address.
+    @param _commonReportTrigger The new address to assign as `commonReportTrigger`.
+    */
+    function setCommonReportTrigger(address _commonReportTrigger) external onlyAuthorized {
+        require(_commonReportTrigger != address(0));
+        commonReportTrigger = ICommonReportTrigger(_commonReportTrigger);
     }
 
     /**

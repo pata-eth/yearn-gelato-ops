@@ -51,7 +51,7 @@ def yGO(
     usdc,
 ):
 
-    yGO = YearnGelatoOps.deploy(lens.address, gelato.address, {"from": owner})
+    yGO = YearnGelatoOps.deploy(lens.address, gelato.address, common_report_trigger.address, {"from": owner})
 
     # get some AETH donations to pay for jobs
     whale.transfer(yGO, amount)
@@ -75,6 +75,10 @@ def yGO(
 @pytest.fixture(scope="function")
 def gelato():
     yield interface.IGelatoOps("0x340759c8346A1E6Ed92035FB8B6ec57cE1D82c2c")
+
+@pytest.fixture(scope="module")
+def common_report_trigger():
+    yield interface.ICommonReportTrigger("0x4D25b3aed34eC1222846F6C87e2ac4A73f4ab6b6")
 
 
 # Optimism WETH AaveV3GenLender
